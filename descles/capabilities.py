@@ -35,13 +35,28 @@ CAPABILITIES = {
         "why": "the only honest source of a REVENUE row — someone has to actually be able to pay",
         "human_kind": "money",
         "steps": [
-            "Create a Paddle sandbox vendor (sandbox-vendors.paddle.com) — separate account, separate keys.",
-            "Catalog > Products: create one product + one price (>= $10). Sandbox auto-approves domains.",
-            "Developer tools > Authentication: copy an API key that starts pdl_sdbx_apikey_ (a new key can come back read-only).",
-            "Developer tools > Notifications: add destination <runtime>/api/webhook/paddle with traffic_source=all.",
-            "Put PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET and PADDLE_CHECKOUT_URL in the runtime's env file, then restart.",
+            "If you already sell with Paddle, point the runtime at that env file: DESCLES_RUNTIME_ENV=<path> "
+            "(PADDLE_API_KEY, PADDLE_NOTIFICATION_WEBHOOK_SECRET, NEXT_PUBLIC_PADDLE_CLIENT_TOKEN, NEXT_PUBLIC_PADDLE_PRICE_ID).",
+            "Otherwise create a Paddle sandbox vendor (sandbox-vendors.paddle.com) — separate account, separate keys; "
+            "sandbox auto-approves domains and needs no paperwork.",
+            "Catalog > Products: one product + one price (>= $10). A new sandbox key can come back read-only — probe a write.",
+            "The Buy button only needs the PUBLIC client token + price id; the runtime renders Paddle.js itself.",
+            "Revenue is then reconciled by POLLING the API (no public URL, no tunnel). "
+            "Webhooks are optional: add destination <public URL>/api/webhook/paddle/<company_id> with traffic_source=all.",
         ],
         "url": "https://sandbox-vendors.paddle.com",
+    },
+    "public_url": {
+        "label": "Public URL", "mode": "key", "env": ["DESCLES_PUBLIC_URL"],
+        "why": "webhooks are push, so the provider has to be able to reach this machine — "
+               "only needed if you want push instead of the API poll, and a localhost page cannot "
+               "receive a visitor who is not you",
+        "human_kind": "money",
+        "steps": [
+            "Install cloudflared (no account needed) and put it on PATH — the runtime then opens its own tunnel, or",
+            "Run your own tunnel and set DESCLES_PUBLIC_URL=https://...",
+        ],
+        "url": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
     },
     "deploy_host": {
         "label": "Deploy host", "mode": "key", "env": ["VERCEL_TOKEN"],

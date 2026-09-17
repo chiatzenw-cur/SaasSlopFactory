@@ -120,6 +120,9 @@ def handle_post(path, raw, body):
         if sub == "sync":
             caps.sync(cid)
             return {"ok": True, "state": runtime.state(cid)}
+        if sub == "sync-revenue":
+            out = runtime.reconcile_revenue(cid, body.get("provider"))
+            return {**out, "state": runtime.state(cid)}
 
     if len(parts) == 5 and parts[0] == "api" and parts[1] == "company" and parts[3] == "project":
         cid, slug, what = parts[2], body.get("slug"), parts[4]

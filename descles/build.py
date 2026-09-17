@@ -73,20 +73,49 @@ def _copy_fallback(opp):
     }
 
 
-def _render(company, project, copy, base_url, checkout):
+def _render(company, project, copy, base_url, checkout, paddle_js=None):
     price = int(copy.get("price_cents") or 0)
+    slug = project["slug"]
+    label = copy.get("cta_label") or "Buy now"
+    script = ""
     if checkout:
-        cta = f'<a class="cta" href="{base_url}/api/p/{project["slug"]}/intent">{copy.get("cta_label") or "Buy now"}</a>'
+        cta = f'<a class="cta" id="cta" href="{base_url}/api/p/{slug}/intent">{label}</a>'
         note = "You will be taken to the payment page."
         warn = ""
+    elif paddle_js:
+        # client-side checkout: only the PUBLIC token and price id are needed, so the
+        # Buy button can be real without a server-side checkout link
+        cta = f'<a class="cta" id="cta" href="#">{label} — ${price/100:.2f}</a>'
+        note = "Payment opens in an overlay on this page."
+        warn = ""
+        script = """
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+<script>
+(function(){
+  var P = window.Paddle;
+  var a = document.getElementById("cta");
+  if(!P){ a.className = "cta off"; a.textContent = "payment library blocked"; return; }
+  %s
+  P.Initialize({token: %s});
+  a.addEventListener("click", function(ev){
+    ev.preventDefault();
+    try { navigator.sendBeacon(%s); } catch(e) {}
+    P.Checkout.open({items:[{priceId: %s}], customData:{project_slug: %s}});
+  });
+})();
+</script>""" % (
+            "P.Environment.set('sandbox');" if paddle_js.get("sandbox") else "",
+            json.dumps(paddle_js["token"]),
+            json.dumps(f"{base_url}/api/p/{slug}/intent"),
+            json.dumps(paddle_js["price_id"]),
+            json.dumps(slug),
+        )
     else:
-        cta = f'<span class="cta off">{copy.get("cta_label") or "Buy now"} — not available yet</span>'
+        cta = f'<span class="cta off">{label} — not available yet</span>'
         note = "Payment is not connected yet. This button is disabled on purpose; the company has filed a setup request."
-        warn = f'<div class="warn">PAYMENT NOT CONNECTED — no payment rail is configured for this company.</div>'
+        warn = '<div class="warn">PAYMENT NOT CONNECTED — no payment rail is configured for this company.</div>'
     bullets = "".join(f"<li>{b}</li>" for b in (copy.get("bullets") or []))
-    faq = "".join(
-        f"<h3>{f.get('q','')}</h3><p>{f.get('a','')}</p>" for f in (copy.get("faq") or [])
-    )
+    faq = "".join(f"<h3>{f.get('q','')}</h3><p>{f.get('a','')}</p>" for f in (copy.get("faq") or []))
     disclosure = (
         f"Operated by {company['name']}. Prices in USD. "
         "Nothing on this page is an endorsement or a guarantee of any outcome."
@@ -102,20 +131,22 @@ def _render(company, project, copy, base_url, checkout):
         faq=faq,
         footer=copy.get("footer_note") or "",
         disclosure=disclosure,
-        pixel=f"{base_url}/api/p/{project['slug']}/pixel.gif",
-    ) + warn
+        pixel=f"{base_url}/api/p/{slug}/pixel.gif",
+    ) + warn + script
 
 
-def build(company, project, copy, base_url):
+def build(company, project, copy, base_url, price=None):
     """Write the artifact to disk. Returns the build row. No network, no excuses."""
     from . import billing
 
     slug = re.sub(r"[^a-z0-9-]", "", project["slug"].lower()) or "product"
     out = config.DATA / "portfolio" / slug
     out.mkdir(parents=True, exist_ok=True)
-    rail = billing.rail_connected() and capabilities_ok(company["id"])
-    checkout = billing.checkout_url(slug, copy.get("price_cents")) if rail else None
-    html = _render(company, project, copy, base_url, checkout)
+    checkout = billing.checkout_url(slug, copy.get("price_cents"))
+    pj = billing.paddle_js_config((price or {}).get("price_id")) if not checkout else None
+    if pj and (price or {}).get("source"):
+        pj["source"] = price["source"]
+    html = _render(company, project, copy, base_url, checkout, pj)
     (out / "index.html").write_text(html, encoding="utf-8")
     spec = {
         "slug": slug,
@@ -124,7 +155,11 @@ def build(company, project, copy, base_url):
         "success_criterion": project["success_criterion"],
         "kill_criterion": project["kill_criterion"],
         "copy": copy,
-        "checkout_connected": bool(checkout),
+        "checkout_connected": bool(checkout or pj),
+        "checkout_mode": "link" if checkout else ("paddle_js" if pj else "disabled"),
+        "price_id": (pj or {}).get("price_id"),
+        "price_source": (pj or {}).get("source"),
+        "price_id_borrowed": (pj or {}).get("borrowed_price_id"),
     }
     (out / "product.json").write_text(json.dumps(spec, ensure_ascii=False, indent=1), encoding="utf-8")
     (out / "README.md").write_text(
@@ -136,15 +171,17 @@ def build(company, project, copy, base_url):
     bid = "build_" + ev.now().replace("-", "").replace(":", "") + "_" + slug[:10]
     files = ["index.html", "product.json", "README.md"]
     db.ex(
-        "INSERT INTO builds(id,company_id,project_id,slug,ts,path,url,files,copy,deploy_state)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO builds(id,company_id,project_id,slug,ts,path,url,files,copy,deploy_state,price_id,price_source)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (bid, company["id"], project["id"], slug, ev.now(), str(out),
-         f"{base_url}/p/{slug}", json.dumps(files), json.dumps(copy, ensure_ascii=False), "LOCAL"),
+         f"{base_url}/p/{slug}", json.dumps(files), json.dumps(copy, ensure_ascii=False), "LOCAL",
+         (pj or {}).get("price_id"), (pj or {}).get("source")),
     )
     ev.append(company["id"], "CTO", "PRODUCT_BUILT", {
         "slug": slug, "path": str(out), "files": files,
-        "checkout_connected": bool(checkout), "build_id": bid,
-    })
+        "checkout_connected": bool(checkout or pj), "build_id": bid,
+        "checkout_mode": spec["checkout_mode"], "price_id": spec["price_id"],
+        "price_source": spec["price_source"]})
     db.ex("UPDATE projects SET stage='BUILT_LOCAL', updated_at=? WHERE id=?", (ev.now(), project["id"]))
     if not capabilities_ok(company["id"]):
         caps.require(company["id"], "payment_rail",

@@ -360,17 +360,45 @@ function tabDecisions(s){
 
 function tabMoney(s){
   const l = s.ledger||[];
-  return `<div class="panel">
+  const rail = s.rail||{};
+  const un = s.unattributed||[];
+  return `
+  <div class="panel">
     <div class="row" style="justify-content:space-between">
-      <h2>Ledger</h2><div class="mono">cash <span class="money">${usd(s.cash_cents)}</span></div></div>
+      <h2>Ledger</h2>
+      <div class="row">
+        <span class="badge ${rail.connected?"b-ok":"b-dim"}">rail ${esc(rail.checkout_mode||"disabled")}</span>
+        <span class="badge b-dim">${esc(rail.paddle_env||"no api key")}</span>
+        <div class="mono">cash <span class="money">${usd(s.cash_cents)}</span></div>
+        <button onclick="syncRevenue()">${rail.can_reconcile?"Reconcile revenue from the API":"no API key"}</button>
+      </div>
+    </div>
     <table><thead><tr><th>ts</th><th>kind</th><th>actor</th><th>memo</th><th style="text-align:right">amount</th></tr></thead>
     <tbody>${l.map(x=>`<tr><td class="dimmer">${when(x.ts)}</td><td><span class="badge ${x.kind==="REVENUE"?"b-ok":x.kind==="CAPITAL"?"b-acc":"b-warn"}">${esc(x.kind)}</span></td>
       <td>${esc(x.actor)}</td><td class="muted small">${esc((x.memo||"").slice(0,150))}</td>
       <td class="mono" style="text-align:right;color:${x.amount_cents<0?"var(--bad)":"var(--ok)"}">${usd(x.amount_cents)}</td></tr>`).join("")}
     </tbody></table>
     <div class="sub" style="margin-top:8px">Every row is a real debit against the charter. Money moves only through
-    <span class="mono">runtime.act() → policy.authorize()</span>.</div>
-  </div>`;
+    <span class="mono">runtime.act() → policy.authorize()</span>; a REVENUE row only through a verified webhook
+    or a reconciled API transaction.</div>
+  </div>
+  ${un.length?`<div class="panel">
+    <h2>Unattributed payments <span class="badge b-warn">not counted in MRR</span></h2>
+    <div class="sub">These arrived from the payment account but name no project, so booking them would credit this
+    company with money it did not earn — a shared provider account delivers every product's sales to the same
+    endpoint. Stored, shown, never counted.</div>
+    <table><thead><tr><th>ts</th><th>provider</th><th>event</th><th>why</th><th style="text-align:right">amount</th></tr></thead>
+    <tbody>${un.map(x=>`<tr><td class="dimmer">${when(x.ts)}</td><td>${esc(x.provider)}</td>
+      <td class="mono small">${esc(x.event_id)}</td><td class="muted small">${esc(x.reason||"")}</td>
+      <td class="mono" style="text-align:right">${usd(x.amount_cents)}</td></tr>`).join("")}</tbody></table>
+  </div>`:""}
+  ${(s.webhooks||[]).length?`<div class="panel"><h3>Provider events seen</h3>
+    <table><thead><tr><th>ts</th><th>provider</th><th>event id</th><th>type</th><th>booked</th><th style="text-align:right">amount</th></tr></thead>
+    <tbody>${s.webhooks.map(x=>`<tr><td class="dimmer">${when(x.ts)}</td><td>${esc(x.provider)}</td>
+      <td class="mono small">${esc(x.event_id)}</td><td class="muted small">${esc(x.type||"")}</td>
+      <td>${x.booked?"<span class='badge b-ok'>booked</span>":"<span class='badge b-dim'>no</span>"}</td>
+      <td class="mono" style="text-align:right">${usd(x.amount_cents)}</td></tr>`).join("")}</tbody></table></div>`:""}
+  `;
 }
 
 function tabEvidence(s){
@@ -519,6 +547,15 @@ async function setupDecide(rid, grant){
   try{
     await api(`/api/setup/${rid}/${grant?"grant":"dismiss"}`,{company_id:H.data.company.id,note});
     toast(grant?"marked connected":"dismissed"); await refresh();
+  }catch(e){ toast("✕ "+e.message,true); }
+}
+async function syncRevenue(){
+  toast("reconciling from the payment API …");
+  try{
+    const r = await api("/api/company/"+H.data.company.id+"/sync-revenue",{});
+    toast(r.ok ? `seen ${r.seen} · booked ${usd(r.booked_cents)} · unattributed ${usd(r.unattributed_cents)} · dupes ${r.duplicates}`
+               : "✕ "+(r.error||"failed"), !r.ok);
+    await refresh();
   }catch(e){ toast("✕ "+e.message,true); }
 }
 async function probe(){

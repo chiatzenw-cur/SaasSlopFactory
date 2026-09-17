@@ -20,15 +20,23 @@ PROVIDERS = {
 
 
 def load_keys(path=None):
-    """Load API keys from an env file. Never prints values."""
-    candidates = [path, os.environ.get("DESCLES_RUNTIME_ENV"), ROOT / ".keys.env"]
-    loaded = []
+    """Load API keys from env files. Never prints values.
+
+    Accepts several files at once (',' or ';' separated): an LLM key and a payment
+    key legitimately live in different products' env files, and pointing at one must
+    not silently unload the other. Earlier files win; real environment always wins.
+    """
+    candidates = []
+    for spec in (path, os.environ.get("DESCLES_RUNTIME_ENV")):
+        if spec:
+            candidates.extend([p for p in str(spec).replace(",", ";").split(";") if p.strip()])
+    candidates.append(str(ROOT / ".keys.env"))
+    loaded, seen = [], []
     for c in candidates:
-        if not c:
-            continue
-        p = pathlib.Path(c)
+        p = pathlib.Path(c.strip())
         if not p.is_file():
             continue
+        seen.append(p.name)
         for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -43,8 +51,7 @@ def load_keys(path=None):
             if k not in os.environ:
                 os.environ[k] = v
                 loaded.append(k)
-        break
-    return loaded
+    return loaded, seen
 
 
 def provider_for(model):

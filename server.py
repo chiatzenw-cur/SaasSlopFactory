@@ -12,7 +12,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from descles import config, console  # noqa: E402
 
-loaded = config.load_keys()
+loaded, seen = config.load_keys()
+if seen:
+    print("env files:", ", ".join(seen))
 if loaded:
     print("keys loaded:", ", ".join(loaded))
 

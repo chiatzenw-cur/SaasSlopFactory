@@ -5,6 +5,7 @@ act() -> policy.authorize() -> ledger. There is no other path.
 """
 
 import json
+import os
 import re
 import time
 import uuid
@@ -227,8 +228,17 @@ def state(company_id):
         "builds": db.rows("SELECT * FROM builds WHERE company_id=? ORDER BY ts DESC", (company_id,)),
         "funnels": {p["slug"]: metrics_mod.funnel(company_id, p["id"]) for p in projs},
         "webhooks": db.rows(
-            "SELECT provider,event_id,ts,type FROM webhook_events WHERE 1=1 ORDER BY ts DESC LIMIT 20"
+            "SELECT provider,event_id,ts,type,booked,amount_cents,reason FROM webhook_events"
+            " ORDER BY ts DESC LIMIT 40"
         ),
+        "unattributed": billing.unattributed(company_id),
+        "rail": {
+            "connected": billing.rail_connected(),
+            "can_reconcile": billing.can_reconcile(),
+            "paddle_env": billing.paddle_env() if billing.can_reconcile() else None,
+            "checkout_mode": ("link" if billing.checkout_url() else
+                              ("paddle_js" if billing.paddle_js_config() else "disabled")),
+        },
         "events": ev.chain(company_id, 60),
         "actions": db.rows("SELECT * FROM actions WHERE company_id=? ORDER BY id DESC LIMIT 60", (company_id,)),
         "runs": db.rows("SELECT * FROM runs WHERE company_id=? ORDER BY id DESC LIMIT 40", (company_id,)),
@@ -446,7 +456,21 @@ def build_project(company_id, project_id):
     }
     copy = agents.cto_landing(c, _model(company_id, "CTO"), opp,
                               evl.get("CFO", {}), evl.get("CTO", {}), evl.get("COO", {}))
-    out = buildmod.build(c, p, copy, base_url())
+    # a Buy button must sell THIS product's price — never a price id borrowed from
+    # another product in a shared payment account
+    prev = db.row("SELECT * FROM builds WHERE project_id=? ORDER BY ts DESC LIMIT 1", (project_id,))
+    price = {"price_id": prev["price_id"], "source": prev["price_source"]} if prev and prev["price_id"] else {}
+    if not price.get("price_id") and billing.can_reconcile():
+        prov = billing.provision_price(p, copy.get("price_cents"))
+        if prov.get("ok"):
+            price = {"price_id": prov["price_id"], "source": f"provisioned in {prov['env']}"}
+            ev.append(company_id, "CTO", "PRICE_PROVISIONED", {
+                "slug": p["slug"], "product_id": prov["product_id"], "price_id": prov["price_id"],
+                "amount": prov["amount"], "currency": prov["currency"], "env": prov["env"]})
+        else:
+            ev.append(company_id, "CTO", "PRICE_PROVISION_FAILED", {
+                "slug": p["slug"], "error": str(prov.get("error"))[:300]})
+    out = buildmod.build(c, p, copy, base_url(), price or None)
     run_log(company_id, "build", True, f"{p['slug']} -> {out['path']}"
             + ("" if out["checkout"] else " (payment rail NOT connected)"), _ms(t0))
     return {"ok": True, **out, "slug": p["slug"]}
@@ -461,6 +485,17 @@ def deploy_project(company_id, project_id):
         return {"ok": False, "error": "nothing built yet"}
     out = buildmod.deploy(c, p, b, base_url())
     run_log(company_id, "deploy", bool(out.get("ok")), json.dumps(out)[:200], _ms(t0))
+    return out
+
+
+def reconcile_revenue(company_id, provider=None):
+    """Pull transactions from the rail's API. This is the path that works behind
+    NAT: no tunnel, no public URL, no human."""
+    t0 = time.time()
+    if provider is None:
+        provider = "paddle" if os.environ.get("PADDLE_API_KEY") else "stripe"
+    out = billing.reconcile(company_id, provider)
+    run_log(company_id, "reconcile", bool(out.get("ok")), json.dumps(out)[:250], _ms(t0))
     return out
 
 

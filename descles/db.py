@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS setup_requests(
 );
 CREATE TABLE IF NOT EXISTS webhook_events(
   provider TEXT, event_id TEXT, ts TEXT, type TEXT, payload TEXT,
+  booked INTEGER DEFAULT 0, amount_cents INTEGER, project_id TEXT, reason TEXT,
   PRIMARY KEY(provider, event_id)
 );
 CREATE TABLE IF NOT EXISTS metrics(
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS metrics(
 );
 CREATE TABLE IF NOT EXISTS builds(
   id TEXT PRIMARY KEY, company_id TEXT, project_id TEXT, slug TEXT, ts TEXT,
-  path TEXT, url TEXT, files TEXT, copy TEXT, deploy_url TEXT, deploy_state TEXT
+  path TEXT, url TEXT, files TEXT, copy TEXT, deploy_url TEXT, deploy_state TEXT,
+  price_id TEXT, price_source TEXT
 );
 """
 
@@ -87,6 +89,23 @@ def conn():
 def init():
     c = conn()
     c.executescript(SCHEMA)
+    _migrate(c)
+    return c
+
+
+def _migrate(c):
+    """sqlite has no ADD COLUMN IF NOT EXISTS; older DBs must still open."""
+    for table, cols in (
+        ("webhook_events", (("booked", "INTEGER DEFAULT 0"), ("amount_cents", "INTEGER"),
+                            ("project_id", "TEXT"), ("reason", "TEXT"))),
+        ("builds", (("price_id", "TEXT"), ("price_source", "TEXT"))),
+    ):
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if not have:
+            continue
+        for col, ddl in cols:
+            if col not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
     return c
 
 

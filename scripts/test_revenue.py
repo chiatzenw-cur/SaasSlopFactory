@@ -114,6 +114,20 @@ try:
 except billing.SignatureError as e:
     check("tampered body rejected", True, str(e))
 
+print("\n[webhook] a payment that names no project (the shared-account trap)")
+foreign = {
+    "event_id": "evt_test_other_product",
+    "event_type": "transaction.completed",
+    "data": {"id": "txn_other", "currency_code": "USD", "custom_data": {},
+             "details": {"totals": {"total": "9900"}}, "customer": {"email": "someone@example.com"}},
+}
+raw3 = json.dumps(foreign).encode()
+res3 = billing.handle_webhook(cid, "paddle", raw3, {"paddle-signature": billing.sign("paddle", raw3, SECRET)})
+check("unattributed payment is NOT booked", res3.get("unattributed") == 9900, str(res3))
+check("MRR unchanged by another product's sale", runtime.state(cid)["mrr_cents"] == 1900,
+      f"mrr={runtime.state(cid)['mrr_cents']}")
+check("it is still stored and surfaced", any(u["event_id"] == "evt_test_other_product" for u in billing.unattributed(cid)))
+
 print("\n[funnel] the measurement the COO's criterion is judged on")
 for _ in range(40):
     runtime.record_page_view(cid, "widget")
