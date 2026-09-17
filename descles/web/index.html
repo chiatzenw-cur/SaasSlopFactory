@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Descles — Corporate Runtime</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#12161b; --panel2:#171c22; --line:#232a33; --line2:#2f3945;
+  --fg:#dfe6ee; --dim:#8b98a6; --dimmer:#5f6b78;
+  --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#5aa9ff; --money:#7ee787;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:13px/1.5 var(--mono);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 20px 80px}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
+h1{font-size:19px}
+h2{font-size:14px;color:var(--fg)}
+h3{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.top{display:flex;align-items:baseline;gap:12px;justify-content:space-between;
+  border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:16px}
+.brand{color:var(--accent);font-weight:700}
+.sub{color:var(--dimmer);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+.grid{display:grid;gap:12px}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.stat .k{font-size:11px;color:var(--dimmer);text-transform:uppercase;letter-spacing:.06em}
+.stat .v{font-size:20px;margin-top:3px}
+.money{color:var(--money)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dimmer);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+tr:hover td{background:#151a20}
+.badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;border:1px solid var(--line2);white-space:nowrap}
+.b-ok{color:var(--ok);border-color:#1f4a2c;background:#0f1f16}
+.b-warn{color:var(--warn);border-color:#4d3c12;background:#1f1a0d}
+.b-bad{color:var(--bad);border-color:#4d2020;background:#1f1010}
+.b-dim{color:var(--dim)}
+.b-acc{color:var(--accent);border-color:#1d3a5c;background:#0e1a28}
+button{font:inherit;background:#1c232b;color:var(--fg);border:1px solid var(--line2);
+  border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:#232c36;border-color:#3d4a58}
+button.primary{background:#12406e;border-color:#1c5a99;color:#cfe6ff}
+button.primary:hover{background:#164e86}
+button.danger{background:#3a1616;border-color:#5e2222;color:#ffd7d7}
+button.danger:hover{background:#4a1b1b}
+button:disabled{opacity:.45;cursor:default}
+input,select,textarea{font:inherit;background:#0e1216;color:var(--fg);border:1px solid var(--line2);
+  border-radius:6px;padding:7px 9px;width:100%}
+input:focus,select:focus,textarea:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+label{display:block;font-size:11px;color:var(--dim);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.05em}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:7px 13px;cursor:pointer;color:var(--dim);border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:12px}
+.tab:hover{color:var(--fg);background:#141a21}
+.tab.on{color:var(--fg);background:var(--panel);border-color:var(--line)}
+.tab .n{color:var(--warn)}
+.muted{color:var(--dim)}
+.dimmer{color:var(--dimmer)}
+.pre{white-space:pre-wrap;word-break:break-word}
+code,.mono{font-family:var(--mono)}
+.q{border-left:2px solid var(--line2);padding:6px 10px;margin:6px 0;color:#c8d2dc;background:#0f1318;border-radius:0 6px 6px 0}
+.card{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--panel2)}
+.card.pend{border-color:#5b4611;background:#191609}
+.ev-title{color:var(--fg);font-weight:600}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:4px 12px;font-size:12px}
+.kv .k{color:var(--dimmer)}
+.small{font-size:12px}
+ul{margin:6px 0;padding-left:18px}
+li{margin:2px 0}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--dim);border-top-color:transparent;
+  border-radius:50%;animation:s .7s linear infinite;vertical-align:-1px}
+@keyframes s{to{transform:rotate(360deg)}}
+.err{color:var(--bad)}
+.warnbox{border:1px solid #5b4611;background:#191609;color:var(--warn);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px}
+.hr{height:1px;background:var(--line);margin:12px 0}
+.pill{font-size:11px;color:var(--dimmer);border:1px solid var(--line);border-radius:20px;padding:2px 9px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <span class="brand">▚ DESCLES</span> <span class="sub">corporate runtime · localhost · your machine</span>
+    </div>
+    <div class="sub" id="health">…</div>
+  </div>
+  <div id="app"><span class="spin"></span> loading</div>
+</div>
+<script>
+const $ = (s,r=document)=>r.querySelector(s);
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd = c => (c==null?"—":"$"+(c/100).toFixed(2));
+const when = t => (t||"").replace("T"," ").replace("+00:00","Z").slice(5,16);
+
+async function api(path, body){
+  const r = await fetch(path, body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined);
+  const j = await r.json();
+  if(j && j.error) throw new Error(j.error);
+  return j;
+}
+const STAGE = {DISCOVERED:"b-acc",VALIDATED:"b-acc",AWAITING_BOARD:"b-warn",FUNDED:"b-ok",BUILDING:"b-ok",
+  LIVE:"b-ok",SCALING:"b-ok",KILLED:"b-bad",SHELVED:"b-dim"};
+
+let H = {route:"#/", data:null, busy:false, note:""};
+
+function simBadge(o){
+  return (o && o._simulated) ? ` <span class="badge b-warn" title="${esc(o._note||"deterministic fallback, not model output")}">SIMULATED</span>` : "";
+}
+
+/* ------------------------------------------------------------- landing */
+function viewLanding(state){
+  const cos = state.companies||[];
+  return `
+  <div class="grid g2">
+    <div class="panel">
+      <h2>Start a company</h2>
+      <div class="sub" style="margin:6px 0 10px">You are the shareholder. The agents are management. Capital, authority and the
+      constitution are enforced in code, not asked for politely.</div>
+      <label>Company name</label>
+      <input id="f_name" value="TinyFish Labs">
+      <label>Mission</label>
+      <input id="f_mission" value="Reach $1,000 MRR by shipping small software products people pay for.">
+      <div class="grid g3" style="margin-top:2px">
+        <div><label>Initial capital ($)</label><input id="f_cap" type="number" step="50" value="500"></div>
+        <div><label>Max $ / experiment</label><input id="f_max" type="number" step="10" value="100"></div>
+        <div><label>Board approval above ($)</label><input id="f_thr" type="number" step="10" value="200"></div>
+      </div>
+      <div class="grid g2">
+        <div><label>Company template</label>
+          <select id="f_tpl">
+            <option value="micro_saas">Micro SaaS Studio</option>
+            <option value="leadgen">Lead Generation Agency</option>
+            <option value="content">Content Business</option>
+          </select></div>
+        <div><label>Operating mode</label>
+          <select id="f_mode">
+            <option value="conservative">Conservative</option>
+            <option value="moderate" selected>Moderate</option>
+            <option value="autonomous">Autonomous</option>
+            <option value="yolo">YOLO-ish</option>
+          </select></div>
+      </div>
+      <label>Management model</label>
+      <input id="f_model" value="deepseek-chat" placeholder="deepseek-chat / qwen-max / gpt-4o">
+      <label>Buying-signal queries (one per line, optional — real HN sweep)</label>
+      <textarea id="f_sq" rows="4">what would you pay for
+I wish there was an app that
+recommend a tool for
+shut up and take my money</textarea>
+      <div class="hr"></div>
+      <div class="row">
+        <button class="primary" onclick="incorporate()">Incorporate Company</button>
+        <span class="sub" id="inc_msg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Your holdings</h2>
+      ${cos.length?`<table><thead><tr><th>Company</th><th>Mode</th><th>Cash</th><th>Created</th></tr></thead><tbody>
+        ${cos.map(c=>`<tr><td><a href="#/c/${c.id}">${esc(c.name)}</a><div class="dimmer small">${esc(c.mission||"").slice(0,90)}</div></td>
+        <td><span class="badge b-dim">${esc(c.mode)}</span></td><td class="mono" data-cash="${c.id}">…</td>
+        <td class="dimmer">${when(c.created_at)}</td></tr>`).join("")}
+      </tbody></table>`:`<div class="muted">No companies yet. Incorporate one — it takes about 15 seconds and $0.04 of tokens.</div>`}
+      <div class="hr"></div>
+      <h3>What the kernel enforces</h3>
+      <ul class="small muted">
+        <li>The CEO <b>cannot</b> spend above its unilateral limit — that becomes a board request, money does not move.</li>
+        <li>Charter clauses (<span class="mono">no_debt</span>, <span class="mono">no_deceptive_marketing</span>, <span class="mono">no_mass_unsolicited_email</span>) beat every role permit.</li>
+        <li>The CFO can veto but <b>cannot</b> allocate; the CEO can allocate but <b>cannot</b> touch the books.</li>
+        <li>Every attempt is recorded, allowed or denied, and the event log is hash-chained.</li>
+      </ul>
+    </div>
+  </div>`;
+}
+
+async function incorporate(){
+  const g = id => $("#"+id).value;
+  $("#inc_msg").innerHTML = `<span class="spin"></span> incorporating…`;
+  try{
+    const r = await api("/api/companies",{name:g("f_name"),mission:g("f_mission"),capital:g("f_cap"),
+      max_experiment:g("f_max"),board_threshold:g("f_thr"),template:g("f_tpl"),mode:g("f_mode"),
+      model:g("f_model"),seed_queries:g("f_sq")});
+    location.hash = "#/c/"+r.company.id;
+  }catch(e){ $("#inc_msg").innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+
+/* ------------------------------------------------------------- company */
+function statRow(s){
+  const burn = s.total_spend_cents;
+  const runway = burn>0 ? "∞" : "∞";
+  return `<div class="grid g4" style="margin-bottom:14px">
+    <div class="stat"><div class="k">Cash</div><div class="v money">${usd(s.cash_cents)}</div></div>
+    <div class="stat"><div class="k">MRR</div><div class="v money">${usd(s.mrr_cents)}</div></div>
+    <div class="stat"><div class="k">Deployed</div><div class="v">${usd(s.total_spend_cents)}</div></div>
+    <div class="stat"><div class="k">Portfolio</div><div class="v">${s.portfolio.active.length} live
+      <span class="dimmer" style="font-size:12px">/ ${s.portfolio.killed.length} killed</span></div></div>
+  </div>`;
+}
+
+function tabOverview(s){
+  const teams = `<div class="panel"><h3>Management</h3><div class="row">${s.agents.map(a=>`
+    <span class="pill">${esc(a.role)} · ${esc(a.model)} <span class="badge b-ok">${esc(a.status)}</span></span>`).join("")}</div>
+    <div class="sub" style="margin-top:8px">Authorities: CEO may allocate ≤ ${usd(s.authority.ceo_unilateral_limit_cents)} alone;
+    above ${usd(s.authority.board_approval_threshold_cents)} it is a board request. Charter clauses:
+    ${s.charter.clauses.map(c=>`<span class="pill">${esc(c)}</span>`).join(" ")}</div></div>`;
+
+  const caps = `<div class="panel"><h3>Capabilities</h3><div class="row">${s.capabilities.map(c=>`
+    <span class="pill">${c.status==="CONNECTED"?"<span class='badge b-ok'>✓</span>":"<span class='badge b-dim'>○</span>"}
+    ${esc(c.name)}</span>`).join("")}</div>
+    <div class="sub" style="margin-top:8px">Unconnected capabilities are shown as not connected — not as an empty list.
+    v1 ships with web search, browser and local filesystem only.</div></div>`;
+
+  const runs = s.runs.length? `<div class="panel"><h3>Operating log</h3><table><thead><tr><th>ts</th><th>phase</th><th>ok</th><th>detail</th><th>ms</th></tr></thead>
+    <tbody>${s.runs.map(r=>`<tr><td class="dimmer">${when(r.ts)}</td><td>${esc(r.phase)}</td>
+      <td>${r.ok?"<span class='badge b-ok'>ok</span>":"<span class='badge b-bad'>fail</span>"}</td>
+      <td class="muted small">${esc(r.detail).slice(0,220)}</td><td class="dimmer">${r.ms||""}</td></tr>`).join("")}</tbody></table></div>`:"";
+
+  return teams + caps + runs;
+}
+
+function tabBoard(s){
+  const reqs = s.board_requests;
+  if(!reqs.length) return `<div class="panel"><div class="muted">No pending board requests.
+    ${s.projects.length?"":"Run an operating cycle to discover opportunities."}</div></div>`;
+  return reqs.map(r=>{
+    const p = r.payload||{}, a = p.args||{};
+    return `<div class="card pend">
+      <div class="row" style="justify-content:space-between">
+        <div><h2>${esc(r.title)}</h2>
+        <div class="sub">${esc(p.role||"")} · tool <span class="mono">${esc(p.tool||"")}</span> · filed ${when(r.ts)}</div></div>
+        <div class="mono" style="font-size:18px" class="money">${usd(r.amount_cents)}</div>
+      </div>
+      <div class="hr"></div>
+      <div class="kv">
+        ${a.success_criterion?`<div class="k">Success criterion</div><div>${esc(a.success_criterion)}</div>`:""}
+        ${a.kill_criterion?`<div class="k">Kill criterion</div><div>${esc(a.kill_criterion)}</div>`:""}
+        ${a.risk_ack?`<div class="k">Risk accepted</div><div>${esc(a.risk_ack)}</div>`:""}
+        ${a.cfo?`<div class="k">CFO review</div><div><span class="badge ${a.cfo.verdict==="PASS"?"b-ok":"b-bad"}">${esc(a.cfo.verdict)}</span>
+          worst case ${usd(a.cfo.worst_case_loss_cents)} · max test ${usd(a.cfo.max_test_spend_cents)}</div>`:""}
+        ${a.coo&&a.coo.validation_plan?`<div class="k">Validation plan</div><div><ul>${a.coo.validation_plan.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
+      </div>
+      ${(a.evidence||[]).length?`<div class="hr"></div><h3>Evidence (fetched, not generated)</h3>
+        ${a.evidence.map(e=>`<div class="q"><a href="${esc(e.url||"#")}" target="_blank">${esc(e.signal_id||"UNVERIFIED")}</a>
+        <span class="dimmer">${esc(e.source||"")}</span><div class="small">${esc((e.quote||"").slice(0,320))}</div></div>`).join("")}`:""}
+      <div class="hr"></div>
+      <div class="row">
+        <input id="note_${r.id}" placeholder="note (optional, recorded in the audit log)" style="flex:1;min-width:220px">
+        <button class="primary" onclick="boardDecide('${r.id}',true)">Approve ${usd(r.amount_cents)}</button>
+        <button class="danger" onclick="boardDecide('${r.id}',false)">Reject</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function tabPortfolio(s){
+  if(!s.projects.length) return `<div class="panel"><div class="muted">No projects. The portfolio is the projection — run a cycle.</div></div>`;
+  return s.projects.map(p=>{
+    const cfo=p.cfo||{}, coo=p.coo||{}, cto=p.cto||{};
+    return `<div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div><span class="ev-title">${esc(p.name)}</span>
+          <span class="badge ${STAGE[p.stage]||"b-dim"}">${esc(p.stage)}</span>
+          <span class="dimmer">/${esc(p.slug)}</span></div>
+        <div class="mono">spent <span class="money">${usd(p.spent_cents)}</span>
+          <span class="dimmer">· revenue ${usd(p.revenue_cents)}</span></div>
+      </div>
+      <div class="small muted" style="margin:6px 0">${esc(p.hypothesis||"").slice(0,300)}</div>
+      <div class="kv small">
+        ${cto.mvp_hours?`<div class="k">MVP</div><div>${cto.mvp_hours}h · ${usd(cto.build_cost_cents)} · ${esc((cto.stack||[]).join(", "))}${simBadge(cto)}</div>`:""}
+        ${cfo.verdict?`<div class="k">CFO</div><div><span class="badge ${cfo.verdict==="PASS"?"b-ok":"b-bad"}">${esc(cfo.verdict)}</span>
+          ${esc(cfo.veto_reason||cfo.reason||"").slice(0,200)}${simBadge(cfo)}</div>`:""}
+        ${coo.success_criterion?`<div class="k">Success / kill</div><div>${esc(coo.success_criterion)} · <span class="dimmer">${esc(coo.kill_criterion||"")}</span>${simBadge(coo)}</div>`:""}
+        ${p.killed_reason?`<div class="k">Killed</div><div class="err">${esc(p.killed_reason)}</div>`:""}
+      </div>
+      <div class="row" style="margin-top:8px">
+        ${p.stage==="DISCOVERED"?`<button onclick="evaluate('${esc(p.slug)}')">Evaluate (CTO→CFO→COO)</button>`:""}
+        ${["DISCOVERED","VALIDATED","AWAITING_BOARD"].includes(p.stage)?`<button class="danger" onclick="killP('${esc(p.slug)}')">Kill</button>`:""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function tabDecisions(s){
+  if(!s.decisions.length) return `<div class="panel"><div class="muted">No decisions yet.</div></div>`;
+  return s.decisions.map((d,i)=>{
+    const pay=d.payload||{}, dec=pay.decision||{}, out=pay.outcome||{};
+    return `<div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>${esc(d.actor)} DECISION · ${esc(d.kind)}</h2>
+        <div><span class="badge ${out.verdict==="ALLOW"?"b-ok":out.verdict==="APPROVAL"?"b-warn":out.verdict==="DENY"?"b-bad":"b-dim"}">${esc(out.verdict||d.authority||"")}</span>
+        <span class="dimmer small"> ${when(d.ts)}</span></div>
+      </div>
+      <div style="margin-top:6px">${esc(d.summary)}</div>
+      <div class="small muted" style="margin-top:4px">${esc(d.rationale||"")}</div>
+      ${out.amount_cents?`<div class="small" style="margin-top:6px">Requested capital <span class="mono money">${usd(out.amount_cents)}</span>
+        ${out.reason?`<span class="dimmer"> — ${esc(out.reason)}</span>`:""}${out.simulated?' <span class="badge b-warn">SIMULATED</span>':""}</div>`:""}
+      ${dec.risk_ack?`<div class="small dimmer" style="margin-top:4px">Risk accepted: ${esc(dec.risk_ack)}</div>`:""}
+    </div>`;
+  }).join("");
+}
+
+function tabMoney(s){
+  const l = s.ledger||[];
+  return `<div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2>Ledger</h2><div class="mono">cash <span class="money">${usd(s.cash_cents)}</span></div></div>
+    <table><thead><tr><th>ts</th><th>kind</th><th>actor</th><th>memo</th><th style="text-align:right">amount</th></tr></thead>
+    <tbody>${l.map(x=>`<tr><td class="dimmer">${when(x.ts)}</td><td><span class="badge ${x.kind==="REVENUE"?"b-ok":x.kind==="CAPITAL"?"b-acc":"b-warn"}">${esc(x.kind)}</span></td>
+      <td>${esc(x.actor)}</td><td class="muted small">${esc((x.memo||"").slice(0,150))}</td>
+      <td class="mono" style="text-align:right;color:${x.amount_cents<0?"var(--bad)":"var(--ok)"}">${usd(x.amount_cents)}</td></tr>`).join("")}
+    </tbody></table>
+    <div class="sub" style="margin-top:8px">Every row is a real debit against the charter. Money moves only through
+    <span class="mono">runtime.act() → policy.authorize()</span>.</div>
+  </div>`;
+}
+
+function tabEvidence(s){
+  const withEv = s.projects.filter(p=>(p.evidence||[]).length);
+  if(!withEv.length) return `<div class="panel"><div class="muted">No evidence rows. Evidence only enters the system as a fetched signal with a URL.</div></div>`;
+  return withEv.map(p=>`<div class="panel"><h2>${esc(p.name)} <span class="dimmer">/${esc(p.slug)}</span></h2>
+    <div class="sub">${(p.signals||[]).length} signal(s) cited by the CMO during discovery</div>
+    ${(p.evidence||[]).map(e=>`<div class="q">
+      <a href="${esc(e.url||"#")}" target="_blank">${esc(e.signal_id||"UNVERIFIED")}</a>
+      <span class="dimmer">${esc(e.source||"")}</span> ${e.title?`· <span class="muted small">${esc(e.title)}</span>`:""}
+      <div class="small" style="margin-top:3px">${esc((e.quote||"").slice(0,420))}</div></div>`).join("")}
+    ${(p.evidence||[]).some(e=>!e.url)?`<div class="warnbox">At least one cited signal id does not exist in the sweep.
+      That is recorded as UNVERIFIED rather than silently dropped.</div>`:""}
+  </div>`).join("");
+}
+
+function tabAudit(s){
+  const acts = s.actions||[];
+  return `<div class="panel"><h2>Action log — every attempt, allowed or denied</h2>
+    <table><thead><tr><th>ts</th><th>actor</th><th>tool</th><th>verdict</th><th>reason</th></tr></thead><tbody>
+    ${acts.map(a=>{let args={};try{args=JSON.parse(a.args||"{}")}catch(e){}
+      return `<tr><td class="dimmer">${when(a.ts)}</td><td>${esc(a.actor)}</td><td class="mono">${esc(a.tool)}
+      <span class="dimmer">${args.amount_cents?usd(args.amount_cents):""}</span></td>
+      <td><span class="badge ${a.verdict==="ALLOW"?"b-ok":a.verdict==="APPROVAL"?"b-warn":"b-bad"}">${esc(a.verdict)}</span></td>
+      <td class="muted small">${esc((a.reason||"").slice(0,150))}</td></tr>`}).join("")}
+    </tbody></table>
+    ${acts.length?"":'<div class="muted">No actions attempted yet.</div>'}
+  </div>
+  <div class="panel"><h2>Event chain</h2>
+    <div class="row" style="justify-content:space-between">
+      <div class="sub" id="chainver">chain: checking…</div>
+      <button onclick="verifyChain()">Verify chain</button></div>
+    <table><thead><tr><th>seq</th><th>actor</th><th>type</th><th>payload</th><th>hash</th></tr></thead><tbody>
+    ${(s.events||[]).map(e=>`<tr><td class="dimmer">${e.seq}</td><td>${esc(e.actor)}</td>
+      <td><span class="badge b-dim">${esc(e.type)}</span></td>
+      <td class="muted small">${esc((e.payload||"").slice(0,190))}</td>
+      <td class="dimmer">${esc((e.hash||"").slice(0,10))}…</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+
+function tabOps(s){
+  return `<div class="panel"><h2>Operating cycle</h2>
+    <div class="sub">discover → validate → board approval → build → deploy → acquire → measure → scale/kill</div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" onclick="tick()">▶ Run operating cycle</button>
+      <span class="sub" id="tick_msg"></span></div>
+    <div class="hr"></div>
+    <h3>Probe the constitution</h3>
+    <div class="sub" style="margin-bottom:8px">Issue a raw actuator call as any role and watch the policy engine answer. This is the same path every agent action takes.</div>
+    <div class="grid g4">
+      <div><label>Role</label><select id="p_role"><option>CEO</option><option>CTO</option><option>CFO</option><option>CMO</option><option>COO</option></select></div>
+      <div><label>Tool</label><select id="p_tool">
+        <option>allocate_budget</option><option>borrow_money</option><option>bank_transfer</option>
+        <option>mass_unsolicited_email</option><option>send_email</option><option>alter_revenue_numbers</option>
+        <option>spend_ads</option><option>spend_cloud</option><option>deploy_production</option></select></div>
+      <div><label>Amount ($)</label><input id="p_amt" type="number" value="300"></div>
+      <div style="display:flex;align-items:flex-end"><button onclick="probe()">Issue</button></div>
+    </div>
+    <div id="probe_out" style="margin-top:10px"></div>
+  </div>
+  <div class="panel"><h3>Recent runs</h3>
+    <table><thead><tr><th>ts</th><th>phase</th><th>ok</th><th>detail</th><th>ms</th></tr></thead><tbody>
+    ${(s.runs||[]).map(r=>`<tr><td class="dimmer">${when(r.ts)}</td><td>${esc(r.phase)}</td>
+      <td>${r.ok?"<span class='badge b-ok'>ok</span>":"<span class='badge b-bad'>fail</span>"}</td>
+      <td class="muted small">${esc(r.detail).slice(0,200)}</td><td class="dimmer">${r.ms||""}</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+
+const TABS = [["overview","Overview",tabOverview],["portfolio","Portfolio",tabPortfolio],
+  ["board","Board",tabBoard],["decisions","Decisions",tabDecisions],["money","Money",tabMoney],
+  ["evidence","Evidence",tabEvidence],["audit","Audit",tabAudit],["ops","Ops",tabOps]];
+
+function viewCompany(s, tab){
+  const t = TABS.find(x=>x[0]===tab)||TABS[0];
+  const nreq = s.board_requests.length;
+  return `
+  <div class="row" style="justify-content:space-between;align-items:flex-end;margin-bottom:10px">
+    <div>
+      <h1>${esc(s.company.name)} <span class="sub">${esc(s.company.id)}</span></h1>
+      <div class="sub">${esc(s.company.mission)}</div>
+    </div>
+    <div class="row">
+      <span class="badge b-dim">${esc(s.company.mode)}</span>
+      <span class="badge ${s.company.status==="ACTIVE"?"b-ok":"b-bad"}">${esc(s.company.status)}</span>
+      <span class="pill">template ${esc(s.company.template)}</span>
+      <a href="#/">holdings</a>
+    </div>
+  </div>
+  ${statRow(s)}
+  <div class="tabs">${TABS.map(x=>`<span class="tab ${x[0]===t[0]?"on":""}" onclick="location.hash='#/c/${s.company.id}/${x[0]}'">${x[1]}${
+      x[0]==="board"&&nreq?` <span class="n">(${nreq})</span>`:""}</span>`).join("")}</div>
+  <div id="tab">${t[2](s)}</div>`;
+}
+
+/* ------------------------------------------------------------- actions */
+async function tick(){
+  const id = H.data.company.id;
+  $("#tick_msg").innerHTML = `<span class="spin"></span> running discovery, evaluation and a CEO decision…`;
+  try{
+    const r = await api(`/api/company/${id}/tick`,{});
+    H.data = r.state; H.data.company.id = id;
+    await refresh();
+    const l = (r.log||[]).filter(x=>x.phase!=="sweep");
+    toast(l.map(x=>`${x.phase}: ${typeof x.detail==="string"?x.detail:(x.detail&&x.detail.phase)?x.detail.phase:JSON.stringify(x.detail&&x.detail.action||"")}`).join(" · "));
+  }catch(e){ $("#tick_msg").innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+async function boardDecide(rid, approve){
+  const note = ($("#note_"+rid)||{}).value || "";
+  try{
+    const r = await api(`/api/board/${rid}/decide`,{company_id:H.data.company.id,approve,note});
+    toast(approve?`board approved ${usd(r.amount_cents)} — capital released`:`request rejected`);
+    await refresh();
+  }catch(e){ toast("✕ "+e.message,true); }
+}
+async function evaluate(slug){
+  try{ await api(`/api/company/${H.data.company.id}/project/evaluate`,{slug}); await refresh(); }
+  catch(e){ toast("✕ "+e.message,true); }
+}
+async function killP(slug){
+  const id=H.data.company.id;
+  const p = H.data.projects.find(x=>x.slug===slug);
+  await api("/api/action",{company_id:id,role:"CEO",tool:"kill_project",amount_cents:0,
+    args:{project_slug:slug,project_id:p.id,title:"Kill "+p.name}});
+  toast("killed "+slug); await refresh();
+}
+async function probe(){
+  const role=$("#p_role").value, tool=$("#p_tool").value, amt=Math.round(parseFloat($("#p_amt").value||0)*100);
+  try{
+    const r = await api("/api/action",{company_id:H.data.company.id,role,tool,amount_cents:amt});
+    const cls = r.verdict==="ALLOW"?"b-ok":r.verdict==="APPROVAL"?"b-warn":"b-bad";
+    $("#probe_out").innerHTML = `<div class="card"><span class="badge ${cls}">${esc(r.verdict)}</span>
+      <span class="mono"> ${esc(role)} · ${esc(tool)} · ${usd(amt)}</span>
+      <div class="small muted" style="margin-top:4px">${esc(r.reason)}</div>
+      ${r.board_request_id?`<div class="small warnbox" style="margin-top:6px">Filed as a board request (${esc(r.board_request_id)}). No money moved.</div>`:""}
+      ${r.event_id?`<div class="small warnbox" style="margin-top:6px">ALLOWED — capital released and written to the ledger (event ${r.event_id}).</div>`:""}
+      </div>`;
+    await refresh();
+  }catch(e){ $("#probe_out").innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+async function verifyChain(){
+  try{
+    const v = await api(`/api/company/${H.data.company.id}/verify`);
+    $("#chainver").innerHTML = v.ok
+      ? `<span class="badge b-ok">chain valid</span> ${v.n} events, every hash recomputed`
+      : `<span class="badge b-bad">BROKEN at seq ${v.broken_at}</span> ${v.n} events`;
+  }catch(e){ $("#chainver").innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+function toast(msg,bad){
+  const d=document.createElement("div");
+  d.style.cssText="position:fixed;left:20px;bottom:20px;z-index:99;max-width:70%;padding:10px 14px;border-radius:8px;border:1px solid "+(bad?"#5e2222":"#2f3945")+";background:#151a20;font-size:12px";
+  d.textContent=msg; document.body.appendChild(d); setTimeout(()=>d.remove(),6000);
+}
+
+/* ------------------------------------------------------------- router */
+async function refresh(){
+  const h = location.hash || "#/";
+  const m = h.match(/^#\/c\/([^/]+)(?:\/(\w+))?/);
+  if(!m){ H.data = await api("/api/companies"); $("#app").innerHTML = viewLanding(H.data); fillCashes(); return; }
+  const s = await api("/api/company/"+m[1]);
+  H.data = s;
+  $("#app").innerHTML = viewCompany(s, m[2]||"overview");
+  if((m[2]||"overview")==="audit") verifyChain();
+}
+async function fillCashes(){
+  document.querySelectorAll("[data-cash]").forEach(async el=>{
+    try{ const s = await api("/api/company/"+el.dataset.cash); el.innerHTML = `<span class="money">${usd(s.cash_cents)}</span>`; }
+    catch(e){ el.innerHTML = `<span class="err">✕</span>`; }
+  });
+}
+async function boot(){
+  try{
+    const h = await api("/api/health");
+    const on = Object.entries(h.models).filter(([k,v])=>v).map(([k])=>k);
+    $("#health").innerHTML = `models: ${on.length?on.map(x=>`<span class="badge b-ok">${x}</span>`).join(" ")
+      :`<span class="badge b-bad">no API key → SIMULATED</span>`} · db ok`;
+  }catch(e){ $("#health").innerHTML = `<span class="err">runtime unreachable</span>`; }
+  await refresh();
+}
+window.addEventListener("hashchange",refresh);
+boot();
+</script>
+</body>
+</html>
