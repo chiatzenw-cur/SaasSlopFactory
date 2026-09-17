@@ -451,6 +451,14 @@ def decide(company_id):
     slug = d.get("project_slug")
     amount = int(d.get("amount_cents") or 0)
     p = project_by_slug(company_id, slug) if slug else None
+    if p and action in ("allocate_capital", "advance_project"):
+        # nobody funds a hypothesis that has not passed the CTO/CFO/COO gate
+        if not evaluations(p["id"]).get("CFO"):
+            ev.append(company_id, "SYSTEM", "EVALUATION_FORCED", {"slug": slug, "why": "CEO tried to fund unevaluated project"})
+            evaluate(company_id, p["id"])
+            p = db.row("SELECT * FROM projects WHERE id=?", (p["id"],))
+            if p["stage"] == "KILLED":
+                action = "idle"
     simulated = bool(d.get("_simulated"))
     outcome = {"action": action, "amount_cents": amount, "simulated": simulated}
 
@@ -534,14 +542,19 @@ def tick(company_id, spend_round=True, queries=None):
         return {"ok": False, "error": "no such company"}
     live = [p for p in s["projects"] if p["stage"] in ("DISCOVERED", "VALIDATED", "AWAITING_BOARD", "FUNDED", "BUILDING", "LIVE", "SCALING")]
     pending = [r for r in s["board_requests"]]
+    discovered = [p for p in s["projects"] if p["stage"] == "DISCOVERED"]
     if pending:
         log.append({"phase": "halt", "detail": f"{len(pending)} board request(s) pending — CEO cannot pre-empt the board", "ms": 0})
+    elif discovered:
+        # the next step in the loop is always: evaluate what has been discovered
+        for p in discovered[:2]:
+            log.append({"phase": "evaluate", "detail": evaluate(company_id, p["id"])})
+        log.append({"phase": "decide", "detail": decide(company_id)})
     elif live:
         log.append({"phase": "skip_discovery", "detail": f"{len(live)} live project(s) already in portfolio", "ms": 0})
-        log.append(decide(company_id))
+        log.append({"phase": "decide", "detail": decide(company_id)})
     else:
         created, raw = discover(company_id, queries=queries)
-        # also expose the sweep sources for the console
         log.append({"phase": "sweep", "detail": ""})
         log.append({"phase": "discover", "detail": [c["slug"] for c in created]})
         if created:
