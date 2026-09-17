@@ -112,21 +112,69 @@ $ python cli.py connect <company> <setup_id> --note "paddle sandbox key added"
 
 ## The money path
 
-A `REVENUE` row is written by a signature-verified payment webhook and nothing else — not a
-model, not a fixture, not a summary of a conversation.
+A `REVENUE` row is written by a signature-verified payment webhook or a reconciled
+provider API transaction, and nothing else — not a model, not a fixture, not a summary
+of a conversation.
 
-- HMAC verified over the **raw body** (`Paddle-Signature: ts=…;h1=…`, `Stripe-Signature: t=…,v1=…`)
-- `webhook_events(provider, event_id)` idempotency ledger — Paddle is at-least-once
-- stale timestamps and tampered bodies rejected; a duplicate never double-counts MRR
-- the amount comes from the provider's own `details.totals` (fee/earnings included), and the
-  project is attributed via `custom_data.project_slug` — when the payload carries none, the
-  event says `inferred from the most recent build` instead of guessing silently
-- `POST /api/webhook/paddle/<company_id>` and `/api/webhook/stripe/<company_id>`
+**Two ways in, and the pull path matters more than it looks:**
 
-`scripts/test_revenue.py` proves the whole gate **with no Paddle account**, because the
-signature is a local HMAC: valid accepted, forged rejected, stale rejected, tampered rejected,
-replay deduped, ledger + MRR + attribution + funnel all checked. Revenue tests run against a
-throwaway DB — a test payment never touches a real company's books.
+| | needs | works behind NAT | when |
+|---|---|---|---|
+| `POST /api/webhook/<provider>/<company>` | a public URL (tunnel or deployed page) | no | push, sub-second |
+| `reconcile()` — polls the provider API | only the API key | **yes** | on demand / on a tick |
+
+So the revenue path does **not** need a tunnel, a public URL, or a human. Proof, run
+read-only against a real sandbox account:
+
+```
+$ DESCLES_RUNTIME_ENV=... python scripts/test_live_reconcile.py
+paddle env: sandbox   api base: https://sandbox-api.paddle.com
+reconcile -> seen=1 booked=0c unattributed=1400c duplicates=0
+company MRR after reconcile: 0c
+second run -> seen=1 booked=0c duplicates=1
+```
+
+That `1400c` is a **real transaction belonging to a different product in the same
+account.** It was not booked. See the attribution rule below — this is the single
+easiest way to end up with a fake MRR number.
+
+### Attribution rule
+
+A payment is booked to this company **only when the payload names a project**
+(`custom_data.project_slug`). A shared provider account delivers every product's sales
+to the same endpoint; crediting those to this company would inflate MRR with money it
+did not earn. Unattributed payments are stored and surfaced on the Money tab under
+"not counted in MRR". Nothing is dropped, nothing is assumed.
+
+### The Buy button sells this product's price, or nothing
+
+`provision_price()` makes the CTO create its **own** product + price in the payment
+account (`POST /products`, `POST /prices`), so a page can never sell a price id
+borrowed from another product in a shared account. Live-catalog writes are refused
+unless `CONFIRM_PRODUCTION_CATALOG=yes` — a product's tax category freezes after its
+first sale, so an accidental live product is effectively irreversible.
+
+```
+PRICE_PROVISIONED  product pro_01m2qaz3wbemhyb62xnxmvnvr5  price pri_01m2qaz4g8vpxb7tnqjh4dzetr  $19.00 one-time
+```
+
+Rebuilds reuse the stored price id rather than creating a second product.
+
+### Other properties
+
+- HMAC verified over the **raw body**; `webhook_events(provider, event_id)` idempotency
+  ledger (at-least-once delivery); stale timestamps and tampered bodies rejected
+- amounts come from the provider's own `details.totals`, which includes `fee` / `earnings`
+  — that is the actual payout
+- accepts `PADDLE_NOTIFICATION_WEBHOOK_SECRET` as well as `PADDLE_WEBHOOK_SECRET`, and
+  loads **several env files** (`DESCLES_RUNTIME_ENV="a.env;b.env"`) because an LLM key and
+  a payment key legitimately live in different products' files
+- the copy is told the checkout is a **one-time charge** so the page cannot describe a
+  subscription the buyer is not being sold
+
+`scripts/test_revenue.py` proves the whole gate with no account (24 checks): valid
+accepted, forged rejected, stale rejected, tampered rejected, replay deduped, an
+unattributed payment not booked, ledger + MRR + attribution + funnel all verified.
 
 ## Measurement
 

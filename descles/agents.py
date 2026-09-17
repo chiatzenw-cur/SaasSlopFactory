@@ -327,7 +327,13 @@ def cto_landing(company, model, opp, cfo, cto, coo):
         " - Do not claim customers, testimonials, ratings, uptime or integrations that do not exist yet.\n"
         " - Do not promise outcomes the evidence does not support. The page may say what it does, not what it wins.\n"
         f" - price_cents must be >= {floor} (Paddle routes sub-$10 prices to custom pricing).\n"
-        "   Default to the CFO's price unless it is below the floor."
+        "   Default to the CFO's price unless it is below the floor.\n"
+        f" - THE CHECKOUT IS A ONE-TIME PAYMENT of {int(cfo.get('price_cents') or 1900)} cents. Do NOT describe\n"
+        "   subscriptions, renewals, per-month pricing or free tiers that imply recurring billing: the\n"
+        "   price that will actually be charged is a single charge, and copy that says otherwise is a\n"
+        "   mis-description of what the buyer is about to pay for.\n"
+        " - State plainly if the product is not finished yet. A pre-launch test page that says so converts\n"
+        "   worse and lies less; the second part is the one that matters."
     )
 
     def fb():
