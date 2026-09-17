@@ -112,6 +112,18 @@ def status(company_id, name):
     if spec["mode"] == "manual":
         row = db.row("SELECT status FROM capabilities WHERE company_id=? AND name=?", (company_id, name))
         return (row["status"] if row else None) or "NOT_CONNECTED"
+    if name == "payment_rail":
+        from . import billing
+        # the rail is usable when the company can both charge and read back its own
+        # money: a client token for checkout, plus an API key to provision prices and
+        # reconcile. Requiring a hand-declared price id would understate what it can do.
+        if billing.paddle_js_config() or billing.checkout_url():
+            return "CONNECTED"
+        if billing.can_reconcile() and db.row(
+            "SELECT id FROM builds WHERE company_id=? AND price_id IS NOT NULL LIMIT 1", (company_id,)
+        ):
+            return "CONNECTED"
+        return "NOT_CONNECTED"
     if any(os.environ.get(k) for k in spec["env"]):
         return "CONNECTED"
     return "NOT_CONNECTED"
@@ -132,6 +144,18 @@ def sync(company_id):
             "INSERT OR REPLACE INTO capabilities(company_id,name,status,detail) VALUES(?,?,?,?)",
             (company_id, name, st, detail),
         )
+        # a request whose capability is now satisfied must not keep asking: a stale
+        # pending item is a false statement about what the company is waiting for
+        if st == "CONNECTED":
+            stale = db.rows(
+                "SELECT id FROM setup_requests WHERE company_id=? AND capability=? AND status='PENDING'",
+                (company_id, name),
+            )
+            for r in stale:
+                db.ex("UPDATE setup_requests SET status='RESOLVED', resolved_at=?, note=? WHERE id=?",
+                      (ev.now(), "capability became available", r["id"]))
+                ev.append(company_id, "SYSTEM", "SETUP_AUTO_RESOLVED",
+                          {"capability": name, "request_id": r["id"]})
 
 
 def pending(company_id):

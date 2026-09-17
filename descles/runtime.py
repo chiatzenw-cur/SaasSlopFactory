@@ -233,11 +233,16 @@ def state(company_id):
         ),
         "unattributed": billing.unattributed(company_id),
         "rail": {
-            "connected": billing.rail_connected(),
+            "connected": billing.rail_connected() or caps.connected(company_id, "payment_rail"),
             "can_reconcile": billing.can_reconcile(),
             "paddle_env": billing.paddle_env() if billing.can_reconcile() else None,
+            "provisioned_prices": len(db.rows(
+                "SELECT id FROM builds WHERE company_id=? AND price_id IS NOT NULL", (company_id,))),
             "checkout_mode": ("link" if billing.checkout_url() else
-                              ("paddle_js" if billing.paddle_js_config() else "disabled")),
+                              ("paddle_js" if billing.paddle_js_config() else
+                               ("per-product provisioned" if db.row(
+                                   "SELECT id FROM builds WHERE company_id=? AND price_id IS NOT NULL LIMIT 1",
+                                   (company_id,)) else "disabled"))),
         },
         "events": ev.chain(company_id, 60),
         "actions": db.rows("SELECT * FROM actions WHERE company_id=? ORDER BY id DESC LIMIT 60", (company_id,)),
