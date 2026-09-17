@@ -58,6 +58,18 @@ CAPABILITIES = {
         ],
         "url": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
     },
+    "posting_identity": {
+        "label": "Posting account", "mode": "manual",
+        "why": "the drafts are written and the links are tracked — posting them needs an account, "
+               "which is an identity the company cannot create for itself",
+        "human_kind": "identity",
+        "steps": [
+            "Open the GTM plan on the project: every channel has a ready-to-paste draft and a tracked URL.",
+            "Post from your own account. The draft already discloses that this is a pre-launch test.",
+            "The runtime will attribute visitors, pricing-intent clicks and payments to each channel itself.",
+        ],
+        "url": None,
+    },
     "deploy_host": {
         "label": "Deploy host", "mode": "key", "env": ["VERCEL_TOKEN"],
         "why": "a landing page on localhost cannot receive a visitor who is not you",

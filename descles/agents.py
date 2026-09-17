@@ -56,14 +56,20 @@ SCHEMAS = {
     "CFO": """{
   "project_slug": "same slug you were given",
   "price_cents": 1900,
-  "expected_cac_cents": 800,
-  "expected_conversion_pct": 4.5,
-  "payback_months": 1.5,
+  "recurring": false,
+  "months_retained": 1,
+  "visitor_to_intent_pct": 5.0,
+  "intent_to_checkout_pct": 40.0,
+  "checkout_to_paid_pct": 80.0,
+  "visitors_planned": 150,
+  "channel": "organic | paid_search | community",
+  "cpc_cents": 0,
+  "variable_cost_per_customer_cents": 200,
+  "fixed_cost_per_month_cents": 0,
+  "refund_rate_pct": 5.0,
+  "payment_rail": "paddle",
   "max_test_spend_cents": 8000,
-  "worst_case_loss_cents": 8000,
-  "verdict": "PASS",
-  "veto_reason": null,
-  "reason": "the arithmetic, stated with the numbers you used"
+  "assumption_sources": [{"input": "visitor_to_intent_pct", "basis": "signal hn:123 — 31 people asked for this"}]
 }""",
     "COO": """{
   "project_slug": "same slug you were given",
@@ -93,6 +99,21 @@ SCHEMAS = {
           {"q": "What happens if it does not work for me?", "a": "refund terms"}],
   "footer_note": "one line, no marketing voice",
   "price_cents": 1900
+}""",
+    "CMO_CHANNELS": """{
+  "channels": [
+    {
+      "channel": "thread_reply | show_hn | subreddit | community | directory | paid_search",
+      "where": "exact URL or community name",
+      "audience_fit": "why these people specifically",
+      "expected_visitors": 40,
+      "cost_cents": 0,
+      "needs_account": true,
+      "tracking_tag": "short-slug",
+      "draft": "the post or reply text, ready to paste"
+    }
+  ],
+  "notes": "what you would do if the first channel fails"
 }""",
 }
 
@@ -207,13 +228,25 @@ def cto_estimate(company, model, opp):
 
 
 def cfo_economics(company, model, opp, cto, cash):
+    """The CFO returns ASSUMPTIONS, not conclusions. The arithmetic is done in code
+    (finance.model) so every figure in the report is recomputable from these inputs,
+    and so a confident paragraph cannot substitute for a plan."""
     user = (
-        "Judge the unit economics of this experiment before a dollar is spent.\n\n"
+        "State the assumptions for the unit economics of this experiment. You do NOT compute profit —\n"
+        "the runtime computes every figure from what you return, and prints the formula next to it.\n\n"
         + "OPPORTUNITY:\n" + json.dumps(opp, ensure_ascii=False, indent=1)
         + "\n\nCTO ESTIMATE:\n" + json.dumps(cto, ensure_ascii=False, indent=1)
-        + f"\n\nCOMPANY CASH: {cash} cents (this is the absolute ceiling on worst_case_loss_cents)"
-        + "\n\nVeto the project if expected CAC is not covered by a plausible price, or if the worst-case"
-        " loss exceeds available cash. You cannot allocate budget — you can only approve or veto spend."
+        + f"\n\nCOMPANY CASH: {cash} cents (this is the ceiling on worst_case_loss_cents)"
+        + "\n\nRules:\n"
+        " - Every funnel rate needs a basis. Cite a signal id, or state a comparison, or write\n"
+        "   'unsupported' in assumption_sources and choose a CONSERVATIVE number.\n"
+        " - visitor_to_intent_pct is the fraction of visitors who click a priced Buy button. For a\n"
+        "   cold audience 1-5% is normal; 20% is a fantasy and will be read as one.\n"
+        " - variable_cost_per_customer_cents is real: LLM/API/compute/storage per paying user.\n"
+        "   For anything that calls a model per use, this is not zero.\n"
+        " - max_test_spend_cents must be affordable: worst case spend caps at company cash.\n"
+        " - Choose 'organic' only if the plan does not buy traffic; then also give cpc_cents = 0.\n"
+        " - You cannot allocate budget. You state what would make this worth doing, or refuse."
     )
 
     def fb():
@@ -222,23 +255,23 @@ def cfo_economics(company, model, opp, cto, cash):
         return {
             "project_slug": slugify(opp.get("name", "")),
             "price_cents": price,
-            "expected_cac_cents": 900,
-            "expected_conversion_pct": 4.0,
-            "payback_months": 1.0,
+            "recurring": False,
+            "months_retained": 1,
+            "visitor_to_intent_pct": 3.0,
+            "intent_to_checkout_pct": 30.0,
+            "checkout_to_paid_pct": 70.0,
+            "visitors_planned": 150,
+            "channel": "organic",
+            "cpc_cents": 0,
+            "variable_cost_per_customer_cents": 200,
+            "fixed_cost_per_month_cents": 0,
+            "refund_rate_pct": 5.0,
+            "payment_rail": "paddle",
             "max_test_spend_cents": loss,
-            "worst_case_loss_cents": loss,
-            "verdict": "PASS" if cash > loss else "VETO",
-            "veto_reason": None if cash > loss else "worst case loss exceeds cash",
-            "reason": f"assumed CAC 900c vs price {price}c; worst case {loss}c <= cash {cash}c",
+            "assumption_sources": [{"input": "all", "basis": "unsupported — deterministic fallback"}],
         }
 
-    out = _ask(company, "CFO", model, user, "CFO", fb)
-    # the hard wall: CFO arithmetic does not get to exceed cash or the charter
-    out["worst_case_loss_cents"] = min(int(out.get("worst_case_loss_cents") or 0), cash)
-    if int(out.get("max_test_spend_cents") or 0) > cash:
-        out["verdict"] = "VETO"
-        out["veto_reason"] = "max_test_spend exceeds company cash"
-    return out
+    return _ask(company, "CFO", model, user, "CFO", fb)
 
 
 def coo_validation_plan(company, model, opp, cfo, cto):
@@ -307,6 +340,50 @@ def ceo_decide(company, model, state):
         }
 
     return _ask(company, "CEO", model, user, "CEO", fb)
+
+
+def cmo_channel_plan(company, model, project, coo, economics, signals):
+    """Go-to-market. The runtime can pick channels, write the drafts and build
+    tracked links; posting from an account is an identity action and stays with the
+    human. Preference order is deliberate: replying in the thread that produced the
+    signal beats any broadcast, because the audience already said the thing."""
+    user = (
+        "Plan how this product gets its first visitors. Be specific: a channel is a URL or a\n"
+        "named community, not 'social media'.\n\n"
+        + "PRODUCT:\n" + json.dumps({k: project.get(k) for k in
+                                     ("slug", "name", "hypothesis", "success_criterion", "kill_criterion")},
+                                    ensure_ascii=False, indent=1)
+        + "\n\nCOO PLAN:\n" + json.dumps(coo, ensure_ascii=False, indent=1)
+        + "\n\nECONOMICS (expected customers/revenue come from here):\n"
+        + json.dumps({k: economics.get(k) for k in ("expected_customers", "expected_revenue_cents",
+                                                    "expected_profit_cents", "breakeven_visitors")},
+                     ensure_ascii=False, indent=1)
+        + "\n\nSIGNALS (real threads — a reply here is the highest-fit channel that exists):\n"
+        + json.dumps([{k: s.get(k) for k in ("id", "title", "url", "query")} for s in (signals or [])][:5],
+                     ensure_ascii=False, indent=1)
+        + "\n\nRULES:\n"
+        " - Ask only for the visitors the plan needs: breakeven_visitors is the number that matters.\n"
+        " - 'draft' must be postable as-is: no 'check us out', no superlatives, no fake numbers. If the\n"
+        "   product is not finished, the draft says so. Disclose that it is a pre-launch test.\n"
+        " - Never plan mass unsolicited email: the charter forbids it and it burns the domain.\n"
+        " - needs_account is true whenever posting requires an identity the company does not have.\n"
+        " - expected_visitors must be a sober estimate for a single post, not a best case."
+    )
+
+    def fb():
+        sig = (signals or [{}])[0]
+        return {
+            "channels": [
+                {"channel": "thread_reply", "where": sig.get("url") or "the source thread",
+                 "audience_fit": "these are the people who asked for this",
+                 "expected_visitors": 40, "cost_cents": 0, "needs_account": True,
+                 "tracking_tag": "thread-reply",
+                 "draft": "unsupported — deterministic fallback, no draft written"},
+            ],
+            "notes": "fallback plan",
+        }
+
+    return _ask(company, "CMO", model, user, "CMO_CHANNELS", fb)
 
 
 def cto_landing(company, model, opp, cfo, cto, coo):

@@ -282,10 +282,23 @@ function tabSetup(s){
     ${(r.steps||[]).length?`<div class="hr"></div><h3>What only you can do</h3>
       <ol class="small muted">${r.steps.map(x=>`<li>${esc(x)}</li>`).join("")}</ol>`:""}
     ${r.url?`<div class="small"><a href="${esc(r.url)}" target="_blank">${esc(r.url)} →</a></div>`:""}
+    ${(r.fields||[]).length?`<div class="hr"></div>
+      <h3>Paste it here — no env files, no restart</h3>
+      <div class="grid g${Math.min(3,(r.fields||[]).length)}">
+      ${r.fields.map(f=>`<div><label>${esc(f.label)} ${f.secret?"· secret":""}</label>
+        <input id="fld_${r.id}_${esc(f.name)}" type="${f.secret?"password":"text"}"
+          placeholder="${esc(f.placeholder||"")}" ${f.set?"":""}>
+        <div class="dimmer small">${f.set?`set ${esc(f.fingerprint)}`:"not set"} ${f.help?"· "+esc(f.help):""}</div></div>`).join("")}
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" onclick="submitSetup('${r.id}')">Save &amp; verify with the provider</button>
+        <span class="sub" id="vres_${r.id}">the runtime calls the API with what you paste, so "connected" means it worked</span>
+      </div>`:""
+    }
     <div class="hr"></div>
     <div class="row">
       <input id="snote_${r.id}" placeholder="note (stored on the setup request)" style="flex:1;min-width:220px">
-      <button class="primary" onclick="setupDecide('${r.id}',true)">I have done this — mark connected</button>
+      <button onclick="setupDecide('${r.id}',true)">Mark connected manually</button>
       <button onclick="setupDecide('${r.id}',false)">Dismiss</button>
     </div>
   </div>`).join(""):`<div class="panel"><div class="muted">Nothing is waiting on you. The company is fully autonomous right now.</div></div>`}
@@ -327,12 +340,19 @@ function tabPortfolio(s){
           <span class="dimmer">${esc(b.deploy_state||"")}</span>
           ${b.deploy_url?`· <a href="${esc(b.deploy_url)}" target="_blank">live</a>`:""}</div>`:""}
         ${funnelLine(s, p.slug)}
+        ${(p.cfo||{}).model?`<div class="k">Economics</div><div>${(()=>{const b=p.cfo.model.scenarios.base;
+          return `expecting <b>${b.customers}</b> customers → <span class="money">${usd(b.revenue_cents)}</span> revenue,
+          <span style="color:${b.profit_cents>0?"var(--ok)":"var(--bad)"}">${usd(b.profit_cents)}</span> profit,
+          worst case −${usd(p.cfo.model.worst_case_loss_cents)}${b.breakeven_visitors!=null?` · break-even ${b.breakeven_visitors} visitors`:""}`})()}
+          <span class="badge ${p.cfo.model.verdict==="PASS"?"b-ok":"b-bad"}">${esc(p.cfo.model.verdict)}</span></div>`:""}
         ${p.killed_reason?`<div class="k">Killed</div><div class="err">${esc(p.killed_reason)}</div>`:""}
       </div>
       <div class="row" style="margin-top:8px">
         ${p.stage==="DISCOVERED"?`<button onclick="evaluate('${esc(p.slug)}')">Evaluate (CTO→CFO→COO)</button>`:""}
         ${p.stage==="FUNDED"?`<button class="primary" onclick="buildP('${esc(p.slug)}')">Build the product</button>`:""}
-        ${p.stage==="BUILT_LOCAL"?`<button onclick="deployP('${esc(p.slug)}')">Deploy</button>`:""}
+        ${p.stage==="BUILT_LOCAL"?`<button onclick="deployP('${esc(p.slug)}')">Deploy</button>
+          <button onclick="buildP('${esc(p.slug)}')">Rebuild page</button>`:""}
+        ${(p.stage==="BUILT_LOCAL"||p.stage==="LIVE")?`<button onclick="planGtm('${esc(p.slug)}')">Plan GTM</button>`:""}
         ${["DISCOVERED","VALIDATED","AWAITING_BOARD"].includes(p.stage)?`<button class="danger" onclick="killP('${esc(p.slug)}')">Kill</button>`:""}
       </div>
     </div>`;
@@ -467,9 +487,102 @@ function tabOps(s){
     </tbody></table></div>`;
 }
 
+function tabReports(s){
+  const withModel = s.projects.filter(p=>(p.cfo||{}).model);
+  let rows = "";
+  let tp=0, tr=0, tw=0;
+  for(const p of withModel){
+    const b = p.cfo.model.scenarios.base, w = p.cfo.model.scenarios.pessimistic;
+    tp += b.profit_cents; tr += b.revenue_cents; tw += (p.cfo.model.worst_case_loss_cents||0);
+    rows += `<tr><td class="mono">${esc(p.slug)}</td><td><span class="badge ${STAGE[p.stage]||"b-dim"}">${esc(p.stage)}</span></td>
+      <td class="mono">${usd(b.price_cents)}</td><td class="mono">${b.customers}</td>
+      <td class="mono">${usd(b.revenue_cents)}</td>
+      <td class="mono" style="color:${b.profit_cents>0?"var(--ok)":"var(--bad)"}">${usd(b.profit_cents)}</td>
+      <td class="mono dimmer">${usd(w.profit_cents)}</td>
+      <td class="mono dimmer">−${usd(p.cfo.model.worst_case_loss_cents)}</td>
+      <td class="mono dimmer">${b.breakeven_visitors==null?"—":b.breakeven_visitors}</td></tr>`;
+  }
+  return `
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2>Shareholder report</h2>
+      <div class="row"><button onclick="loadReport('shareholder')">Shareholder report</button>
+      ${withModel.map(p=>`<button onclick="loadReport('${esc(p.slug)}')">${esc(p.slug)}</button>`).join("")}</div>
+    </div>
+    <div class="sub">The CFO states assumptions; the runtime computes the arithmetic. Every row is
+    recomputable from the numbers below it — open a report to see the formula next to each figure.</div>
+  </div>
+  <div class="panel"><h3>Expected outcome per project (base case)</h3>
+    <table><thead><tr><th>project</th><th>stage</th><th>price</th><th>customers</th><th>revenue</th>
+    <th>profit</th><th>pessimistic</th><th>worst-case loss</th><th>break-even visitors</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="9" class="muted">No project has been evaluated yet.</td></tr>'}
+    ${rows?`<tr><td colspan="4" style="text-align:right"><b>total</b></td><td class="mono"><b>${usd(tr)}</b></td>
+      <td class="mono" style="color:${tp>0?"var(--ok)":"var(--bad)"}"><b>${usd(tp)}</b></td><td></td>
+      <td class="mono">−${usd(tw)}</td><td></td></tr>`:""}</tbody></table>
+    ${rows&&tp<=0?`<div class="warnbox" style="margin-top:10px">Expected profit across the portfolio is not positive.
+      That is a fact about the assumptions, not a reason to hope.</div>`:""}
+  </div>
+  <div class="panel"><h3>Report</h3><div id="report_body" class="small"><span class="muted">Pick a report above.</span></div></div>`;
+}
+
+function tabGtm(s){
+  const items = s.projects.filter(p=>(p.evaluations||{}).GTM);
+  if(!items.length) return `<div class="panel"><div class="muted">No GTM plan yet.
+    The CMO writes one per project — it picks the channels, writes the drafts and builds the tracked links.</div></div>`;
+  return items.map(p=>{
+    const g = p.evaluations.GTM;
+    const f = (s.funnels||{})[p.slug]||{};
+    const src = f.by_source||{};
+    return `<div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2>${esc(p.name)} <span class="dimmer">/${esc(p.slug)}</span></h2>
+        <div class="row"><span class="badge b-dim">planned ${g.planned_visitors} visitors</span>
+        ${g.breakeven_visitors?`<span class="badge b-warn">break-even ${g.breakeven_visitors}</span>`:""}
+        ${g.simulated?'<span class="badge b-warn">SIMULATED</span>':""}</div>
+      </div>
+      ${(g.channels||[]).map((c,i)=>`<div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div><b>${esc(c.channel)}</b> <span class="muted">${esc(c.where||"")}</span></div>
+          <div class="row"><span class="badge ${c.cost_cents?"b-warn":"b-ok"}">${c.cost_cents?usd(c.cost_cents):"free"}</span>
+            <span class="badge b-dim">~${c.expected_visitors} visitors</span>
+            ${c.needs_account?'<span class="badge b-acc">needs your account</span>':""}</div>
+        </div>
+        <div class="small dimmer" style="margin:6px 0">${esc(c.audience_fit||"")}</div>
+        <div class="q small" id="draft_${i}_${esc(p.slug)}">${esc(c.draft||"")}</div>
+        <div class="row" style="margin-top:6px">
+          <button onclick="copyDraft('draft_${i}_${esc(p.slug)}')">Copy draft</button>
+          <input readonly value="${esc(c.tracked_url||"")}" style="flex:1;min-width:260px;font-size:12px">
+          ${c.where&&c.where.startsWith("http")?`<a href="${esc(c.where)}" target="_blank"><button>Open channel</button></a>`:""}
+        </div>
+      </div>`).join("")}
+      ${g.notes?`<div class="sub">${esc(g.notes)}</div>`:""}
+      <div class="hr"></div>
+      <h3>Measured, by channel</h3>
+      ${Object.keys(src).length?`<table><thead><tr><th>source</th><th>views</th><th>pricing intent</th><th>rate</th></tr></thead>
+        <tbody>${Object.entries(src).map(([k,v])=>`<tr><td class="mono">${esc(k)}</td><td class="mono">${v.views}</td>
+          <td class="mono">${v.intents}</td><td class="mono">${v.intent_rate_pct==null?"—":v.intent_rate_pct+"%"}</td></tr>`).join("")}</tbody></table>`
+        :`<div class="muted">No visits attributed yet. Posting a draft with its tracked link fills this in — a channel that produces nothing is a fact worth having.</div>`}
+    </div>`;
+  }).join("");
+}
+
+async function copyDraft(id){
+  const t = document.getElementById(id);
+  try{ await navigator.clipboard.writeText(t.innerText); toast("draft copied"); }
+  catch(e){ toast("copy failed — select the text manually", true); }
+}
+async function loadReport(slug){
+  $("#report_body").innerHTML = `<span class="spin"></span> building report…`;
+  try{
+    const r = await api(`/api/company/${H.data.company.id}/report/${slug}`);
+    $("#report_body").innerHTML = `<div class="pre" style="font-size:12px;line-height:1.55">${esc(r.markdown)}</div>`;
+  }catch(e){ $("#report_body").innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+
 const TABS = [["overview","Overview",tabOverview],["portfolio","Portfolio",tabPortfolio],
-  ["board","Board",tabBoard],["setup","Setup",tabSetup],["decisions","Decisions",tabDecisions],
-  ["money","Money",tabMoney],["evidence","Evidence",tabEvidence],["audit","Audit",tabAudit],["ops","Ops",tabOps]];
+  ["reports","Reports",tabReports],["gtm","GTM",tabGtm],["board","Board",tabBoard],["setup","Setup",tabSetup],
+  ["decisions","Decisions",tabDecisions],["money","Money",tabMoney],["evidence","Evidence",tabEvidence],
+  ["audit","Audit",tabAudit],["ops","Ops",tabOps]];
 
 function viewCompany(s, tab){
   const t = TABS.find(x=>x[0]===tab)||TABS[0];
@@ -540,6 +653,30 @@ async function deployP(slug){
   try{ const r = await api("/api/company/"+H.data.company.id+"/project/deploy",{slug});
     toast(r.result && r.result.ok ? "live -> "+r.result.url : "blocked: "+((r.result||{}).blocked||"see Setup"));
     await refresh(); }
+  catch(e){ toast("✕ "+e.message,true); }
+}
+async function submitSetup(rid){
+  const req = (H.data.setup_requests||[]).find(r=>r.id===rid)||{fields:[]};
+  const values = {};
+  for(const f of (req.fields||[])){
+    const el = document.getElementById(`fld_${rid}_${f.name}`);
+    if(el && el.value.trim()) values[f.name] = el.value.trim();
+  }
+  if(!Object.keys(values).length){ toast("nothing to save", true); return; }
+  $("#vres_"+rid).innerHTML = `<span class="spin"></span> calling the provider API…`;
+  try{
+    const r = await api(`/api/setup/${rid}/submit`,{company_id:H.data.company.id,values});
+    const v = r.verified||{};
+    $("#vres_"+rid).innerHTML = v.ok
+      ? `<span class="badge b-ok">verified</span> ${esc(v.detail||"")}`
+      : `<span class="err">✕ ${esc(v.error||"rejected")}</span>`;
+    toast(v.ok ? "connected — verified live" : "stored, but the provider rejected it", !v.ok);
+    await refresh();
+  }catch(e){ $("#vres_"+rid).innerHTML = `<span class="err">✕ ${esc(e.message)}</span>`; }
+}
+async function planGtm(slug){
+  toast("the CMO is picking channels and writing drafts …");
+  try{ await api("/api/company/"+H.data.company.id+"/project/gtm",{slug}); toast("GTM plan ready"); await refresh(); }
   catch(e){ toast("✕ "+e.message,true); }
 }
 async function setupDecide(rid, grant){

@@ -10,9 +10,11 @@ import re
 import time
 import uuid
 
-from . import agents, billing, build as buildmod, capabilities as caps, config, db, events as ev, llm
+from . import agents, billing, build as buildmod, capabilities as caps, config, db, events as ev
+from . import finance
+from . import llm
 from . import metrics as metrics_mod
-from . import policy, roles, signals as sigmod
+from . import policy, roles, secrets, signals as sigmod
 
 TEMPLATES = {
     "micro_saas": {
@@ -38,6 +40,12 @@ TEMPLATES = {
         "loop": ["Research", "Create", "Distribute", "Monetize"],
         "default_mission": "Grow an audience that pays.",
         "seed_queries": ["how do you learn", "best explanation of"],
+    },
+    "b2b_saas": {
+        "label": "B2B SaaS Studio",
+        "loop": ["Find funded pain", "Validate", "Board approval", "Build", "Sell", "Measure", "Scale/Kill"],
+        "default_mission": "Reach $1,000 MRR selling software to teams that are already paying for the problem.",
+        "seed_queries": ["is there a way to automate", "we are hiring a", "our current tool cannot"],
     },
 }
 
@@ -278,7 +286,19 @@ def ceo_state(company_id):
                 "hypothesis": p["hypothesis"],
                 "signal_ids": [x.get("id") for x in p["signals"]][:3],
                 "cto": {k: p["cto"].get(k) for k in ("mvp_hours", "build_cost_cents", "build_risk")} if p["cto"] else {},
-                "cfo": {k: p["cfo"].get(k) for k in ("verdict", "veto_reason", "max_test_spend_cents", "worst_case_loss_cents")} if p["cfo"] else {},
+                "cfo": {k: p["cfo"].get(k) for k in
+                        ("verdict", "veto_reason", "max_test_spend_cents", "worst_case_loss_cents",
+                         "price_cents")} if p["cfo"] else {},
+                "economics": (lambda b: {
+                    "expected_customers": b["customers"],
+                    "expected_revenue_cents": b["revenue_cents"],
+                    "expected_profit_cents": b["profit_cents"],
+                    "gross_margin_pct": b["gross_margin_pct"],
+                    "breakeven_visitors": b["breakeven_visitors"],
+                    "pessimistic_profit_cents": (p["cfo"].get("model") or {}).get("scenarios", {}).get("pessimistic", {}).get("profit_cents"),
+                })(((p["cfo"].get("model") or {}).get("scenarios") or {}).get("base") or {
+                    "customers": None, "revenue_cents": None, "profit_cents": None,
+                    "gross_margin_pct": None, "breakeven_visitors": None}) if p["cfo"] else {},
                 "coo": {k: p["coo"].get(k) for k in ("cost_cents", "success_criterion", "kill_criterion")} if p["coo"] else {},
             }
             for p in s["projects"]
@@ -372,13 +392,21 @@ def _queries(company_id, extra=None):
 def sweep(company_id, queries=None):
     t0 = time.time()
     qs = _queries(company_id, queries)
-    sigs, sources = sigmod.sweep(qs, per_query=15)
+    c = get(company_id)
+    srcs = sigmod.SOURCES_BY_TEMPLATE.get(c["template"], ["hn"])
+    sigs, sources = sigmod.sweep(qs, sources=srcs, per_query=15)
     ok = any(v.get("ok") for v in sources.values())
     ev.append(company_id, "CMO", "SIGNALS_SWEPT", {
-        "queries": qs, "n_signals": len(sigs),
-        "sources": {k: {"ok": v.get("ok"), "status": v.get("status"), "n": v.get("n")} for k, v in sources.items()},
+        "queries": qs, "n_signals": len(sigs), "sources_used": srcs,
+        "sources_refused": [{"name": k, "tier": v.get("tier"), "why": v.get("why")}
+                            for k, v in sigmod.REGISTRY.items()
+                            if v.get("commercial_ok") is False and k not in srcs],
+        "sources": {k: {"ok": v.get("ok"), "status": v.get("status"), "n": v.get("n"),
+                        "tier": v.get("tier")} for k, v in sources.items()},
     })
-    run_log(company_id, "sweep", ok, f"{len(sigs)} signals from {sum(1 for v in sources.values() if v.get('ok'))} ok sources", _ms(t0))
+    run_log(company_id, "sweep", ok,
+            f"{len(sigs)} signals from {sum(1 for v in sources.values() if v.get('ok'))} ok source-queries "
+            f"across {len(srcs)} sources", _ms(t0))
     return sigs, sources
 
 
@@ -428,17 +456,123 @@ def discover(company_id, signals=None, queries=None):
     return created, out
 
 
+def reports_dir():
+    d = config.DATA / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def project_report(company_id, slug):
+    p = project_by_slug(company_id, slug)
+    if not p:
+        return None
+    f = reports_dir() / f"{p['slug']}-unit-economics.md"
+    if not f.is_file():
+        return None
+    return {"slug": p["slug"], "path": str(f), "markdown": f.read_text(encoding="utf-8")}
+
+
+def shareholder_report(company_id):
+    """The whole portfolio, in the shape a shareholder reads: what it cost, what it
+    expects, what it can lose."""
+    s = state(company_id)
+    md = finance.portfolio_report(s["company"], s["projects"], s["cash_cents"], s["ledger"])
+    f = reports_dir() / f"{company_id}-shareholder.md"
+    f.write_text(md, encoding="utf-8")
+    ev.append(company_id, "CFO", "SHAREHOLDER_REPORT", {
+        "path": str(f),
+        "projects": [{"slug": p["slug"], "stage": p["stage"],
+                      "expected_profit_cents": ((p.get("cfo") or {}).get("model") or {}).get("scenarios", {}).get("base", {}).get("profit_cents")}
+                     for p in s["projects"]],
+    })
+    return {"path": str(f), "markdown": md}
+
+
+def recompute_economics(company_id, project_id):
+    """Re-run the CFO model on a project that is already past the gate (the model may
+    have changed, the stage must not). Writes a fresh report."""
+    t0 = time.time()
+    p = db.row("SELECT * FROM projects WHERE id=?", (project_id,))
+    if not p:
+        return {"ok": False, "error": "no such project"}
+    evl = evaluations(p["id"])
+    opp = {
+        "name": p["name"], "one_liner": p["hypothesis"], "problem": p["hypothesis"],
+        "signal_ids": [s.get("id") for s in json.loads(p["signals"] or "[]")],
+        "price_guess_cents": (evl.get("CFO", {}) or {}).get("price_cents"),
+        "monetization": "paid",
+    }
+    cto = evl.get("CTO") or agents.cto_estimate(get(company_id), _model(company_id, "CTO"), opp)
+    cfo_raw = agents.cfo_economics(get(company_id), _model(company_id, "CFO"), opp, cto, cash(company_id))
+    m = finance.verdict_from_cfo(cfo_raw,
+                                 max_test_spend_cents=int(cfo_raw.get("max_test_spend_cents") or 0),
+                                 build_cost_cents=int(cto.get("build_cost_cents") or 0),
+                                 cash_cents=cash(company_id))
+    cfo = {**cfo_raw, "verdict": m["verdict"], "veto_reason": ("; ".join(m["kill"]) or None),
+           "reason": m["summary"], "price_cents": m["assumptions"]["price_cents"],
+           "max_test_spend_cents": m["max_test_spend_cents"],
+           "worst_case_loss_cents": m["worst_case_loss_cents"], "model": m}
+    _save_eval(company_id, project_id, "CFO", cfo)
+    rep = reports_dir() / f"{p['slug']}-unit-economics.md"
+    rep.write_text(finance.report_md(p, m, cfo_raw.get("note") or ""), encoding="utf-8")
+    b = m["scenarios"]["base"]
+    ev.append(company_id, "CFO", "ECONOMICS_RECOMPUTED", {
+        "slug": p["slug"], "verdict": m["verdict"], "expected_customers": b["customers"],
+        "expected_profit_cents": b["profit_cents"], "report": str(rep)})
+    run_log(company_id, "recompute", True, f"{p['slug']}: {m['verdict']} profit {b['profit_cents']}c", _ms(t0))
+    return {"ok": True, "verdict": m["verdict"], "model": m, "report": str(rep)}
+
+
+def plan_gtm(company_id, project_id):
+    """Go-to-market. Everything the machine can do alone happens here: channel choice,
+    real drafts, tracked links, and the setup card for the one step that needs an account."""
+    t0 = time.time()
+    c = get(company_id)
+    p = db.row("SELECT * FROM projects WHERE id=?", (project_id,))
+    if not p:
+        return {"ok": False, "error": "no such project"}
+    evl = evaluations(p["id"])
+    cfo_model = (evl.get("CFO", {}).get("model") or {})
+    base = ((cfo_model.get("scenarios") or {}).get("base")) or {}
+    signals = json.loads(p["signals"] or "[]")
+    out = agents.cmo_channel_plan(c, _model(company_id, "CMO"), p, evl.get("COO", {}), base, signals)
+    channels = []
+    for ch in out.get("channels", []) or []:
+        tag = re.sub(r"[^a-z0-9-]", "", str(ch.get("tracking_tag") or ch.get("channel") or "ch").lower())[:24]
+        channels.append({**ch, "tracking_tag": tag or "ch",
+                         "tracked_url": f"{base_url()}/p/{p['slug']}?src={tag or 'ch'}"})
+    planned = sum(int(ch.get("expected_visitors") or 0) for ch in channels)
+    need_account = [ch for ch in channels if ch.get("needs_account")]
+    payload = {"slug": p["slug"], "channels": channels, "notes": out.get("notes"),
+               "planned_visitors": planned,
+               "breakeven_visitors": (base.get("breakeven_visitors") if isinstance(base, dict) else None),
+               "simulated": bool(out.get("_simulated"))}
+    _save_eval(company_id, project_id, "GTM", payload)
+    ev.append(company_id, "CMO", "GTM_PLANNED", {
+        "slug": p["slug"], "planned_visitors": planned,
+        "channels": [{"channel": ch.get("channel"), "where": ch.get("where")} for ch in channels],
+        "needs_account": len(need_account),
+    })
+    if need_account and channels:
+        caps.require(company_id, "posting_identity",
+                     f"{len(need_account)} channel(s) are ready to post and only need an account",
+                     project_id)
+    run_log(company_id, "gtm", bool(channels), f"{len(channels)} channel(s), {planned} visitors planned", _ms(t0))
+    return {"ok": True, **payload}
+
+
 def _setup_rows(company_id):
     out = []
     for r in db.rows(
         "SELECT * FROM setup_requests WHERE company_id=? ORDER BY (status='PENDING') DESC, ts DESC",
         (company_id,),
     ):
-        import json as _j
         try:
-            r["steps"] = _j.loads(r["steps"] or "[]")
+            r["steps"] = json.loads(r["steps"] or "[]")
         except Exception:  # noqa: BLE001
             r["steps"] = []
+        r["fields"] = secrets.fields_for(r["capability"])
+        r["human_kind"] = (caps.CAPABILITIES.get(r["capability"]) or {}).get("human_kind")
         out.append(r)
     return out
 
@@ -504,11 +638,12 @@ def reconcile_revenue(company_id, provider=None):
     return out
 
 
-def record_page_view(company_id, slug):
+def record_page_view(company_id, slug, src=None):
     p = project_by_slug(company_id, slug)
     if not p:
         return {"ok": False, "error": "no such project"}
-    metrics_mod.record(company_id, "page_view", 1, project_id=p["id"], meta={"slug": slug})
+    metrics_mod.record(company_id, "page_view", 1, project_id=p["id"],
+                       meta={"slug": slug, "src": (src or "direct")[:40]})
     return {"ok": True, "funnel": metrics_mod.funnel(company_id, p["id"])}
 
 
@@ -534,6 +669,9 @@ def evaluate(company_id, project_id):
     """CTO cost -> CFO unit economics -> COO validation plan. Each is an evaluation row."""
     t0 = time.time()
     p = db.row("SELECT * FROM projects WHERE id=?", (project_id,))
+    if p and p["stage"] in ("FUNDED", "BUILT_LOCAL", "BUILDING", "LIVE", "SCALING"):
+        # never downgrade a funded project: re-running the gate would overwrite its stage
+        return {"ok": False, "skipped": f"{p['stage']} is past evaluation — use recompute for economics only"}
     opp = {
         "name": p["name"],
         "one_liner": p["hypothesis"],
@@ -546,14 +684,47 @@ def evaluate(company_id, project_id):
     ev.append(company_id, "CTO", "MVP_ESTIMATED", {"slug": p["slug"], **{k: cto.get(k) for k in
              ("mvp_hours", "build_cost_cents", "time_to_launch_days", "build_risk")}})
 
-    cfo = agents.cfo_economics(get(company_id), _model(company_id, "CFO"), opp, cto, cash(company_id))
+    cfo_raw = agents.cfo_economics(get(company_id), _model(company_id, "CFO"), opp, cto, cash(company_id))
+    # the CFO states assumptions; the model is computed here so every figure is
+    # recomputable and cannot be a paragraph's opinion
+    m = finance.verdict_from_cfo(
+        cfo_raw,
+        max_test_spend_cents=int(cfo_raw.get("max_test_spend_cents") or 0),
+        build_cost_cents=int(cto.get("build_cost_cents") or 0),
+        cash_cents=cash(company_id),
+    )
+    cfo = {
+        **cfo_raw,
+        "verdict": m["verdict"],
+        "veto_reason": ("; ".join(m["kill"]) or None),
+        "reason": m["summary"],
+        "price_cents": m["assumptions"]["price_cents"],
+        "max_test_spend_cents": m["max_test_spend_cents"],
+        "worst_case_loss_cents": m["worst_case_loss_cents"],
+        "model": m,
+    }
     _save_eval(company_id, project_id, "CFO", cfo)
-    ev.append(company_id, "CFO", "UNIT_ECONOMICS", {"slug": p["slug"], **{k: cfo.get(k) for k in
-             ("verdict", "veto_reason", "price_cents", "expected_cac_cents", "max_test_spend_cents", "worst_case_loss_cents")}})
+    rep_dir = config.DATA / "reports"
+    rep_dir.mkdir(parents=True, exist_ok=True)
+    rep_path = rep_dir / f"{p['slug']}-unit-economics.md"
+    rep_path.write_text(finance.report_md(p, m, cfo_raw.get("note") or ""), encoding="utf-8")
+    b = m["scenarios"]["base"]
+    ev.append(company_id, "CFO", "UNIT_ECONOMICS", {
+        "slug": p["slug"], "verdict": m["verdict"], "kill": m["kill"],
+        "price_cents": m["assumptions"]["price_cents"],
+        "visitors": b["visitors"], "expected_customers": b["customers"],
+        "expected_revenue_cents": b["revenue_cents"], "expected_profit_cents": b["profit_cents"],
+        "pessimistic_profit_cents": m["scenarios"]["pessimistic"]["profit_cents"],
+        "breakeven_visitors": b["breakeven_visitors"],
+        "max_test_spend_cents": m["max_test_spend_cents"],
+        "worst_case_loss_cents": m["worst_case_loss_cents"],
+        "report": str(rep_path),
+    })
 
-    if str(cfo.get("verdict", "")).upper() != "PASS":
-        _set_stage(company_id, project_id, "KILLED", killed_reason=f"CFO veto: {cfo.get('veto_reason') or cfo.get('reason')}")
-        ev.append(company_id, "CFO", "PROJECT_KILLED", {"slug": p["slug"], "reason": cfo.get("veto_reason") or cfo.get("reason")})
+    if m["verdict"] != "PASS":
+        _set_stage(company_id, project_id, "KILLED",
+                   killed_reason="CFO veto: " + ("; ".join(m["kill"]) or "computed model is not positive"))
+        ev.append(company_id, "CFO", "PROJECT_KILLED", {"slug": p["slug"], "reason": "; ".join(m["kill"])})
         run_log(company_id, "evaluate", True, f"{p['slug']}: CFO veto", _ms(t0))
         return {"stage": "KILLED", "cfo": cfo}
 

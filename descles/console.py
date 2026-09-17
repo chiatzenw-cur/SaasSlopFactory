@@ -10,7 +10,8 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import billing, capabilities as caps, config, db, events as ev, policy, roles, runtime
+from . import billing, capabilities as caps, config, db, events as ev, policy, roles, runtime, secrets
+from . import signals as sigmod
 
 WEB = config.ROOT / "descles" / "web"
 GIF = (
@@ -45,6 +46,9 @@ def handle_get(path, q):
         return {"companies": runtime.companies()}
     if path == "/api/templates":
         return {"templates": runtime.TEMPLATES}
+    if path == "/api/sources":
+        return {"sources": sigmod.source_report(),
+                "by_template": sigmod.SOURCES_BY_TEMPLATE}
     if path == "/api/why":
         # the boundaries, stated by the code that enforces them
         return {
@@ -59,7 +63,7 @@ def handle_get(path, q):
             },
         }
     if path.startswith("/api/company/"):
-        rest = path[len("/api/company/") :].split("/")
+        rest = path[len("/api/company/"):].split("/")
         cid = rest[0]
         s = runtime.state(cid)
         if not s:
@@ -71,6 +75,10 @@ def handle_get(path, q):
             return {"events": ev.chain(cid, 500), "verify": ev.verify(cid)}
         if sub == "verify":
             return ev.verify(cid)
+        if sub == "report":
+            slug = rest[2] if len(rest) > 2 else None
+            r = runtime.shareholder_report(cid) if slug in (None, "shareholder") else runtime.project_report(cid, slug)
+            return r or _err("no report yet — the CFO writes one when a project is evaluated")
         if sub == "project":
             slug = rest[2] if len(rest) > 2 else None
             for p in s["projects"]:
@@ -135,6 +143,10 @@ def handle_post(path, raw, body):
             return {"ok": True, "result": runtime.build_project(cid, p["id"]), "state": runtime.state(cid)}
         if what == "deploy":
             return {"ok": True, "result": runtime.deploy_project(cid, p["id"]), "state": runtime.state(cid)}
+        if what == "gtm":
+            return {"ok": True, "result": runtime.plan_gtm(cid, p["id"]), "state": runtime.state(cid)}
+        if what == "recompute":
+            return {"ok": True, "result": runtime.recompute_economics(cid, p["id"]), "state": runtime.state(cid)}
         return _err("unknown project action")
 
     if len(parts) == 4 and parts[0] == "api" and parts[1] == "board" and parts[3] == "decide":
@@ -144,15 +156,35 @@ def handle_post(path, raw, body):
         out = runtime.board_decide(cid, parts[2], bool(body.get("approve")), body.get("note") or "")
         return {**out, "state": runtime.state(cid)}
 
-    if len(parts) == 4 and parts[0] == "api" and parts[1] == "setup" and parts[3] in ("grant", "dismiss"):
+    if len(parts) == 4 and parts[0] == "api" and parts[1] == "setup" and parts[3] in ("grant", "dismiss", "submit"):
         cid = body.get("company_id")
         if not cid:
             return _err("company_id required")
+        rid = parts[2]
+        if parts[3] == "submit":
+            r = db.row("SELECT * FROM setup_requests WHERE id=? AND company_id=?", (rid, cid))
+            if not r:
+                return _err("no such setup request")
+            values = {k: v for k, v in (body.get("values") or {}).items()
+                      if k in {f["name"] for f in secrets.FIELDS.get(r["capability"], [])}}
+            stored = secrets.store(values)
+            caps.sync(cid)
+            probe = secrets.verify(r["capability"])
+            ev.append(cid, "BOARD", "SETUP_SUBMITTED", {
+                "capability": r["capability"], "request_id": rid,
+                "fields_stored": stored, "probe": probe})
+            if probe.get("ok"):
+                out = caps.grant(cid, rid, probe.get("detail") or "verified via API")
+                out["verified"] = probe
+            else:
+                out = {"ok": False, "verified": probe, "stored": stored,
+                       "error": "stored, but the provider rejected it — nothing was marked connected"}
+            return {**out, "state": runtime.state(cid), "fields": secrets.fields_for(r["capability"])}
         if parts[3] == "grant":
-            out = caps.grant(cid, parts[2], body.get("note") or "")
+            out = caps.grant(cid, rid, body.get("note") or "")
         else:
             db.ex("UPDATE setup_requests SET status='DISMISSED', resolved_at=?, note=? WHERE id=? AND company_id=?",
-                  (ev.now(), body.get("note") or "", parts[2], cid))
+                  (ev.now(), body.get("note") or "", rid, cid))
             out = {"ok": True, "status": "DISMISSED"}
         return {**out, "state": runtime.state(cid)}
 
@@ -215,7 +247,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not cid:
                     return self._send(404, "cannot resolve company", "text/plain")
                 if what == "pixel.gif":
-                    runtime.record_page_view(cid, slug)
+                    src = None
+                    if "src=" in u.query:
+                        src = u.query.split("src=")[-1].split("&")[0][:40]
+                    runtime.record_page_view(cid, slug, src)
                     return self._send(200, GIF, "image/gif")
                 if what == "intent":
                     out = runtime.record_pricing_intent(cid, slug)

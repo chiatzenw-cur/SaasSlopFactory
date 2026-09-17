@@ -10,12 +10,15 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from descles import config, console  # noqa: E402
+from descles import config, console, secrets  # noqa: E402
 
 loaded, seen = config.load_keys()
 if seen:
     print("env files:", ", ".join(seen))
 if loaded:
     print("keys loaded:", ", ".join(loaded))
+stored = secrets.load()
+if stored:
+    print("secrets.env:", ", ".join(stored))
 
 console.serve()

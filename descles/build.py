@@ -54,6 +54,17 @@ footer{{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-s
 """
 
 
+SOURCE_TAG = """
+<script>
+// attribute the visit to the channel that sent it; without JS the view is still counted
+(function(){
+  var s = location.search.match(/[?&]src=([A-Za-z0-9_-]{1,40})/);
+  var img = document.querySelector('img[src*="pixel.gif"]');
+  if (s && img) { img.src = img.src + '?src=' + s[1]; }
+})();
+</script>"""
+
+
 def _copy_fallback(opp):
     name = opp.get("name") or "The product"
     return {
@@ -132,7 +143,7 @@ def _render(company, project, copy, base_url, checkout, paddle_js=None):
         footer=copy.get("footer_note") or "",
         disclosure=disclosure,
         pixel=f"{base_url}/api/p/{slug}/pixel.gif",
-    ) + warn + script
+    ) + warn + script + SOURCE_TAG
 
 
 def build(company, project, copy, base_url, price=None):

@@ -44,4 +44,25 @@ def funnel(company_id, project_id):
         "intent_rate_pct": round(100.0 * i / v, 2) if v else None,
         "revenue_cents": int(rev["s"] if rev else 0),
         "orders": int(rev["n"] if rev else 0),
+        "by_source": by_source(company_id, project_id),
     }
+
+
+def by_source(company_id, project_id):
+    """Which channel actually produced the traffic. Without this, GTM is a story."""
+    try:
+        rows = db.rows(
+            "SELECT COALESCE(json_extract(meta,'$.src'),'direct') src, name, COUNT(*) n"
+            " FROM metrics WHERE company_id=? AND project_id=? AND name IN ('page_view','pricing_intent')"
+            " GROUP BY src, name ORDER BY src",
+            (company_id, project_id),
+        )
+    except Exception:  # noqa: BLE001  (no JSON1)
+        return {}
+    out = {}
+    for r in rows:
+        d = out.setdefault(r["src"], {"views": 0, "intents": 0})
+        d["views" if r["name"] == "page_view" else "intents"] = int(r["n"])
+    for d in out.values():
+        d["intent_rate_pct"] = round(100.0 * d["intents"] / d["views"], 2) if d["views"] else None
+    return out
