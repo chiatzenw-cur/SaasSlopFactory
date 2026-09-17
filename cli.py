@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from descles import config, runtime, events as ev  # noqa: E402
+from descles import capabilities as caps, config, runtime, events as ev  # noqa: E402
 
 B = "\033[1m"
 D = "\033[2m"
@@ -86,6 +86,34 @@ def cmds_status(a):
     for r in s["board_requests"]:
         print(f"\n  {Y}BOARD REQUEST{X} {D}{r['id']}{X}")
         print(f"    {r['title']}   {B}{money(r['amount_cents'])}{X}")
+    for r in s["setup_requests"]:
+        if r["status"] != "PENDING":
+            continue
+        print(f"\n  {Y}SETUP REQUEST{X} {D}{r['id']}{X} ({r['capability']})")
+        print(f"    {r['title']}")
+        print(f"    {D}{r['why']}{X}")
+        for st in r.get("steps", []):
+            print(f"      - {st}")
+        if r.get("url"):
+            print(f"    {C}{r['url']}{X}")
+    print()
+
+
+def cmds_setup(a):
+    c = find(a.company)
+    s = runtime.state(c["id"])
+    pend = [r for r in s["setup_requests"] if r["status"] == "PENDING"]
+    if not pend:
+        print("nothing is waiting on you — the company is fully autonomous")
+        return
+    for r in pend:
+        print(f"\n{B}{r['title']}{X}  {D}{r['id']}{X}")
+        print(f"  capability  {r['capability']}")
+        print(f"  why         {r['why']}")
+        for st in r.get("steps", []):
+            print(f"    - {st}")
+        if r.get("url"):
+            print(f"  {C}{r['url']}{X}")
     print()
 
 
@@ -160,10 +188,17 @@ def main():
     cl = cs.add_parser("list")
     cl.set_defaults(fn=cmds_list)
 
-    for name, fn in (("status", cmds_status), ("tick", cmds_tick), ("board", cmds_board), ("verify", cmds_verify)):
+    for name, fn in (("status", cmds_status), ("tick", cmds_tick), ("board", cmds_board),
+                     ("setup", cmds_setup), ("verify", cmds_verify)):
         s = sub.add_parser(name)
         s.add_argument("company")
         s.set_defaults(fn=fn)
+    cn = sub.add_parser("connect", help="mark a setup request as done (you did the human part)")
+    cn.add_argument("company")
+    cn.add_argument("setup_id")
+    cn.add_argument("--note", default="")
+    cn.set_defaults(fn=lambda a: print(json.dumps(
+        caps.grant(find(a.company)["id"], a.setup_id, a.note), ensure_ascii=False, indent=1)))
     ap = sub.add_parser("approve")
     ap.add_argument("company")
     ap.add_argument("request_id")

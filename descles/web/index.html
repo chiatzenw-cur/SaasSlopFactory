@@ -105,8 +105,8 @@ async function api(path, body){
   if(j && j.error) throw new Error(j.error);
   return j;
 }
-const STAGE = {DISCOVERED:"b-acc",VALIDATED:"b-acc",AWAITING_BOARD:"b-warn",FUNDED:"b-ok",BUILDING:"b-ok",
-  LIVE:"b-ok",SCALING:"b-ok",KILLED:"b-bad",SHELVED:"b-dim"};
+const STAGE = {DISCOVERED:"b-acc",VALIDATED:"b-acc",AWAITING_BOARD:"b-warn",FUNDED:"b-ok",BUILT_LOCAL:"b-acc",
+  BUILDING:"b-ok",LIVE:"b-ok",SCALING:"b-ok",KILLED:"b-bad",SHELVED:"b-dim"};
 
 let H = {route:"#/", data:null, busy:false, note:""};
 
@@ -259,10 +259,56 @@ function tabBoard(s){
   }).join("");
 }
 
+function tabSetup(s){
+  const reqs = s.setup_requests||[];
+  const pend = reqs.filter(r=>r.status==="PENDING");
+  const done = reqs.filter(r=>r.status!=="PENDING");
+  const kindBadge = k => k==="money" ? '<span class="badge b-warn">needs money</span>'
+    : k==="identity" ? '<span class="badge b-acc">needs your identity</span>' : '<span class="badge b-dim">optional</span>';
+  return `
+  <div class="panel">
+    <h2>Setup requests — the only things the company cannot do itself</h2>
+    <div class="sub">Everything else runs unattended. These are exactly the two things that need a human:
+    <b>money</b> (a payment rail, a host, an ad account) and <b>identity</b> (a verified account, a domain registrant).
+    A missing capability parks one project; it never stops the company and it never fakes a result.</div>
+  </div>
+  ${pend.length?pend.map(r=>`<div class="card pend">
+    <div class="row" style="justify-content:space-between">
+      <div><h2>${esc(r.title)}</h2>
+        <div class="sub">capability <span class="mono">${esc(r.capability)}</span> · filed ${when(r.ts)}</div></div>
+      <div>${kindBadge((s.capabilities.find(c=>c.name===r.capability)||{}).human_kind||"")}</div>
+    </div>
+    <div style="margin-top:8px">${esc(r.why||"")}</div>
+    ${(r.steps||[]).length?`<div class="hr"></div><h3>What only you can do</h3>
+      <ol class="small muted">${r.steps.map(x=>`<li>${esc(x)}</li>`).join("")}</ol>`:""}
+    ${r.url?`<div class="small"><a href="${esc(r.url)}" target="_blank">${esc(r.url)} →</a></div>`:""}
+    <div class="hr"></div>
+    <div class="row">
+      <input id="snote_${r.id}" placeholder="note (stored on the setup request)" style="flex:1;min-width:220px">
+      <button class="primary" onclick="setupDecide('${r.id}',true)">I have done this — mark connected</button>
+      <button onclick="setupDecide('${r.id}',false)">Dismiss</button>
+    </div>
+  </div>`).join(""):`<div class="panel"><div class="muted">Nothing is waiting on you. The company is fully autonomous right now.</div></div>`}
+  ${done.length?`<div class="panel"><h3>History</h3><table><thead><tr><th>ts</th><th>capability</th><th>status</th><th>note</th></tr></thead><tbody>
+    ${done.map(r=>`<tr><td class="dimmer">${when(r.ts)}</td><td class="mono">${esc(r.capability)}</td>
+    <td><span class="badge ${r.status==="GRANTED"?"b-ok":"b-dim"}">${esc(r.status)}</span></td>
+    <td class="muted small">${esc(r.note||"")}</td></tr>`).join("")}</tbody></table></div>`:""}
+  `;
+}
+
+function funnelLine(s, slug){
+  const f = (s.funnels||{})[slug];
+  if(!f) return "";
+  const rate = f.intent_rate_pct==null ? "—" : f.intent_rate_pct+"%";
+  return `<div class="k">Measured</div><div>${f.views} views · ${f.intents} pricing-intent (${rate}) · ${usd(f.revenue_cents)} revenue
+    ${f.verdict?`<span class="badge ${f.verdict==="ON TRACK"?"b-ok":"b-warn"}">${esc(f.verdict)} vs ${f.target_pct}% criterion</span>`:""}</div>`;
+}
+
 function tabPortfolio(s){
   if(!s.projects.length) return `<div class="panel"><div class="muted">No projects. The portfolio is the projection — run a cycle.</div></div>`;
   return s.projects.map(p=>{
     const cfo=p.cfo||{}, coo=p.coo||{}, cto=p.cto||{};
+    const b = (s.builds||[]).find(x=>x.project_id===p.id);
     return `<div class="card">
       <div class="row" style="justify-content:space-between">
         <div><span class="ev-title">${esc(p.name)}</span>
@@ -277,10 +323,16 @@ function tabPortfolio(s){
         ${cfo.verdict?`<div class="k">CFO</div><div><span class="badge ${cfo.verdict==="PASS"?"b-ok":"b-bad"}">${esc(cfo.verdict)}</span>
           ${esc(cfo.veto_reason||cfo.reason||"").slice(0,200)}${simBadge(cfo)}</div>`:""}
         ${coo.success_criterion?`<div class="k">Success / kill</div><div>${esc(coo.success_criterion)} · <span class="dimmer">${esc(coo.kill_criterion||"")}</span>${simBadge(coo)}</div>`:""}
+        ${b?`<div class="k">Built</div><div><a href="/p/${esc(b.slug)}" target="_blank">/p/${esc(b.slug)}</a>
+          <span class="dimmer">${esc(b.deploy_state||"")}</span>
+          ${b.deploy_url?`· <a href="${esc(b.deploy_url)}" target="_blank">live</a>`:""}</div>`:""}
+        ${funnelLine(s, p.slug)}
         ${p.killed_reason?`<div class="k">Killed</div><div class="err">${esc(p.killed_reason)}</div>`:""}
       </div>
       <div class="row" style="margin-top:8px">
         ${p.stage==="DISCOVERED"?`<button onclick="evaluate('${esc(p.slug)}')">Evaluate (CTO→CFO→COO)</button>`:""}
+        ${p.stage==="FUNDED"?`<button class="primary" onclick="buildP('${esc(p.slug)}')">Build the product</button>`:""}
+        ${p.stage==="BUILT_LOCAL"?`<button onclick="deployP('${esc(p.slug)}')">Deploy</button>`:""}
         ${["DISCOVERED","VALIDATED","AWAITING_BOARD"].includes(p.stage)?`<button class="danger" onclick="killP('${esc(p.slug)}')">Kill</button>`:""}
       </div>
     </div>`;
@@ -388,12 +440,13 @@ function tabOps(s){
 }
 
 const TABS = [["overview","Overview",tabOverview],["portfolio","Portfolio",tabPortfolio],
-  ["board","Board",tabBoard],["decisions","Decisions",tabDecisions],["money","Money",tabMoney],
-  ["evidence","Evidence",tabEvidence],["audit","Audit",tabAudit],["ops","Ops",tabOps]];
+  ["board","Board",tabBoard],["setup","Setup",tabSetup],["decisions","Decisions",tabDecisions],
+  ["money","Money",tabMoney],["evidence","Evidence",tabEvidence],["audit","Audit",tabAudit],["ops","Ops",tabOps]];
 
 function viewCompany(s, tab){
   const t = TABS.find(x=>x[0]===tab)||TABS[0];
   const nreq = s.board_requests.length;
+  const nsetup = (s.setup_requests||[]).filter(r=>r.status==="PENDING").length;
   return `
   <div class="row" style="justify-content:space-between;align-items:flex-end;margin-bottom:10px">
     <div>
@@ -407,9 +460,13 @@ function viewCompany(s, tab){
       <a href="#/">holdings</a>
     </div>
   </div>
+  ${nsetup?`<div class="warnbox" style="font-size:13px">
+    <b>${nsetup} setup request${nsetup>1?"s":""} waiting on you</b> — the company is autonomous on everything else.
+    <a href="#/c/${s.company.id}/setup" style="color:var(--warn);text-decoration:underline">open Setup</a></div>`:""}
   ${statRow(s)}
   <div class="tabs">${TABS.map(x=>`<span class="tab ${x[0]===t[0]?"on":""}" onclick="location.hash='#/c/${s.company.id}/${x[0]}'">${x[1]}${
-      x[0]==="board"&&nreq?` <span class="n">(${nreq})</span>`:""}</span>`).join("")}</div>
+      x[0]==="board"&&nreq?` <span class="n">(${nreq})</span>`:""}${
+      x[0]==="setup"&&nsetup?` <span class="n">(${nsetup})</span>`:""}</span>`).join("")}</div>
   <div id="tab">${t[2](s)}</div>`;
 }
 
@@ -443,6 +500,26 @@ async function killP(slug){
   await api("/api/action",{company_id:id,role:"CEO",tool:"kill_project",amount_cents:0,
     args:{project_slug:slug,project_id:p.id,title:"Kill "+p.name}});
   toast("killed "+slug); await refresh();
+}
+async function buildP(slug){
+  toast("building "+slug+" …");
+  try{ const r = await api("/api/company/"+H.data.company.id+"/project/build",{slug});
+    toast(r.result && r.result.ok ? "built -> "+r.result.url : "build failed"); await refresh(); }
+  catch(e){ toast("✕ "+e.message,true); }
+}
+async function deployP(slug){
+  toast("deploying "+slug+" …");
+  try{ const r = await api("/api/company/"+H.data.company.id+"/project/deploy",{slug});
+    toast(r.result && r.result.ok ? "live -> "+r.result.url : "blocked: "+((r.result||{}).blocked||"see Setup"));
+    await refresh(); }
+  catch(e){ toast("✕ "+e.message,true); }
+}
+async function setupDecide(rid, grant){
+  const note = ($("#snote_"+rid)||{}).value || "";
+  try{
+    await api(`/api/setup/${rid}/${grant?"grant":"dismiss"}`,{company_id:H.data.company.id,note});
+    toast(grant?"marked connected":"dismissed"); await refresh();
+  }catch(e){ toast("✕ "+e.message,true); }
 }
 async function probe(){
   const role=$("#p_role").value, tool=$("#p_tool").value, amt=Math.round(parseFloat($("#p_amt").value||0)*100);
@@ -493,7 +570,9 @@ async function boot(){
     const h = await api("/api/health");
     const on = Object.entries(h.models).filter(([k,v])=>v).map(([k])=>k);
     $("#health").innerHTML = `models: ${on.length?on.map(x=>`<span class="badge b-ok">${x}</span>`).join(" ")
-      :`<span class="badge b-bad">no API key → SIMULATED</span>`} · db ok`;
+      :`<span class="badge b-bad">no API key → SIMULATED</span>`}
+      · <span class="badge ${h.payment_rail?"b-ok":"b-dim"}">${h.payment_rail?"payment rail":"no payment rail"}</span>
+      · <span class="badge ${h.deploy_host?"b-ok":"b-dim"}">${h.deploy_host?"deploy host":"no deploy host"}</span>`;
   }catch(e){ $("#health").innerHTML = `<span class="err">runtime unreachable</span>`; }
   await refresh();
 }

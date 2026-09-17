@@ -5,10 +5,13 @@ act() -> policy.authorize() -> ledger. There is no other path.
 """
 
 import json
+import re
 import time
 import uuid
 
-from . import agents, config, db, events as ev, llm, policy, roles, signals as sigmod
+from . import agents, billing, build as buildmod, capabilities as caps, config, db, events as ev, llm
+from . import metrics as metrics_mod
+from . import policy, roles, signals as sigmod
 
 TEMPLATES = {
     "micro_saas": {
@@ -46,6 +49,11 @@ def _id(prefix):
 
 def _ms(t0):
     return int((time.time() - t0) * 1000)
+
+
+def base_url():
+    import os
+    return os.environ.get("DESCLES_BASE_URL") or f"http://127.0.0.1:{config.PORT}"
 
 
 def run_log(company_id, phase, ok, detail, ms):
@@ -111,23 +119,12 @@ def incorporate(name, mission, capital_cents=50000, max_experiment_cents=10000,
         )
         ev.append(cid, "SYSTEM", "AGENT_SPAWNED", {"role": role, "model": model})
 
-    for cap, st in [
-        ("web_search", "CONNECTED"),
-        ("browser", "CONNECTED"),
-        ("local_filesystem", "CONNECTED"),
-        ("github", "NOT_CONNECTED"),
-        ("gmail", "NOT_CONNECTED"),
-        ("stripe", "NOT_CONNECTED"),
-        ("google_ads", "NOT_CONNECTED"),
-        ("meta_ads", "NOT_CONNECTED"),
-        ("vercel", "NOT_CONNECTED"),
-        ("play_console", "NOT_CONNECTED"),
-        ("domain_registrar", "NOT_CONNECTED"),
-    ]:
+    for cap, st in [(name, "CONNECTED") for name in ("web_search", "browser", "local_filesystem")]:
         db.ex(
             "INSERT OR REPLACE INTO capabilities(company_id,name,status,detail) VALUES(?,?,?,?)",
             (cid, cap, st, ""),
         )
+    caps.sync(cid)
     return get(cid)
 
 
@@ -213,14 +210,25 @@ def state(company_id):
         "projects": projs,
         "portfolio": {
             "active": [p["slug"] for p in projs if p["stage"] in
-                       ("DISCOVERED", "VALIDATED", "AWAITING_BOARD", "FUNDED", "BUILDING", "LIVE", "SCALING")],
+                       ("DISCOVERED", "VALIDATED", "AWAITING_BOARD", "FUNDED", "BUILT_LOCAL",
+                        "BUILDING", "LIVE", "SCALING")],
             "killed": [p["slug"] for p in projs if p["stage"] == "KILLED"],
             "shelved": [p["slug"] for p in projs if p["stage"] == "SHELVED"],
         },
         "board_requests": pend,
         "decisions": dec,
         "agents": db.rows("SELECT role,model,status FROM agents WHERE company_id=? ORDER BY rowid", (company_id,)),
-        "capabilities": db.rows("SELECT name,status FROM capabilities WHERE company_id=? ORDER BY rowid", (company_id,)),
+        "capabilities": [
+            {**r, "human_kind": (caps.CAPABILITIES.get(r["name"]) or {}).get("human_kind"),
+             "label": (caps.CAPABILITIES.get(r["name"]) or {}).get("label", r["name"])}
+            for r in db.rows("SELECT name,status,detail FROM capabilities WHERE company_id=? ORDER BY rowid", (company_id,))
+        ],
+        "setup_requests": _setup_rows(company_id),
+        "builds": db.rows("SELECT * FROM builds WHERE company_id=? ORDER BY ts DESC", (company_id,)),
+        "funnels": {p["slug"]: metrics_mod.funnel(company_id, p["id"]) for p in projs},
+        "webhooks": db.rows(
+            "SELECT provider,event_id,ts,type FROM webhook_events WHERE 1=1 ORDER BY ts DESC LIMIT 20"
+        ),
         "events": ev.chain(company_id, 60),
         "actions": db.rows("SELECT * FROM actions WHERE company_id=? ORDER BY id DESC LIMIT 60", (company_id,)),
         "runs": db.rows("SELECT * FROM runs WHERE company_id=? ORDER BY id DESC LIMIT 40", (company_id,)),
@@ -405,6 +413,83 @@ def discover(company_id, signals=None, queries=None):
     return created, out
 
 
+def _setup_rows(company_id):
+    out = []
+    for r in db.rows(
+        "SELECT * FROM setup_requests WHERE company_id=? ORDER BY (status='PENDING') DESC, ts DESC",
+        (company_id,),
+    ):
+        import json as _j
+        try:
+            r["steps"] = _j.loads(r["steps"] or "[]")
+        except Exception:  # noqa: BLE001
+            r["steps"] = []
+        out.append(r)
+    return out
+
+
+def build_project(company_id, project_id):
+    """FUNDED -> a real artifact on disk. No capability needed, so this is never
+    blocked: the only human input the build itself needs is none."""
+    t0 = time.time()
+    c = get(company_id)
+    p = db.row("SELECT * FROM projects WHERE id=?", (project_id,))
+    if not p:
+        return {"ok": False, "error": "no such project"}
+    evl = evaluations(p["id"])
+    opp = {
+        "name": p["name"],
+        "one_liner": p["hypothesis"],
+        "problem": p["hypothesis"],
+        "signal_ids": [s.get("id") for s in json.loads(p["signals"] or "[]")],
+        "monetization": "paid",
+    }
+    copy = agents.cto_landing(c, _model(company_id, "CTO"), opp,
+                              evl.get("CFO", {}), evl.get("CTO", {}), evl.get("COO", {}))
+    out = buildmod.build(c, p, copy, base_url())
+    run_log(company_id, "build", True, f"{p['slug']} -> {out['path']}"
+            + ("" if out["checkout"] else " (payment rail NOT connected)"), _ms(t0))
+    return {"ok": True, **out, "slug": p["slug"]}
+
+
+def deploy_project(company_id, project_id):
+    t0 = time.time()
+    c = get(company_id)
+    p = db.row("SELECT * FROM projects WHERE id=?", (project_id,))
+    b = db.row("SELECT * FROM builds WHERE project_id=? ORDER BY ts DESC LIMIT 1", (project_id,))
+    if not b:
+        return {"ok": False, "error": "nothing built yet"}
+    out = buildmod.deploy(c, p, b, base_url())
+    run_log(company_id, "deploy", bool(out.get("ok")), json.dumps(out)[:200], _ms(t0))
+    return out
+
+
+def record_page_view(company_id, slug):
+    p = project_by_slug(company_id, slug)
+    if not p:
+        return {"ok": False, "error": "no such project"}
+    metrics_mod.record(company_id, "page_view", 1, project_id=p["id"], meta={"slug": slug})
+    return {"ok": True, "funnel": metrics_mod.funnel(company_id, p["id"])}
+
+
+def record_pricing_intent(company_id, slug):
+    """The COO's success criterion is a pricing-intent rate. This is the event that
+    measures it — a click on a real CTA, not a model's estimate."""
+    p = project_by_slug(company_id, slug)
+    if not p:
+        return {"ok": False, "error": "no such project"}
+    metrics_mod.record(company_id, "pricing_intent", 1, project_id=p["id"], meta={"slug": slug})
+    ev.append(company_id, "VISITOR", "PRICING_INTENT", {"slug": slug})
+    f = metrics_mod.funnel(company_id, p["id"])
+    crit = p["success_criterion"] or ""
+    m = re.search(r"([\d.]+)\s*%", crit)
+    if m and f["intent_rate_pct"] is not None:
+        target = float(m.group(1))
+        f["target_pct"] = target
+        f["verdict"] = "ON TRACK" if f["intent_rate_pct"] >= target else "BELOW CRITERION"
+    return {"ok": True, "funnel": f}
+
+
 def evaluate(company_id, project_id):
     """CTO cost -> CFO unit economics -> COO validation plan. Each is an evaluation row."""
     t0 = time.time()
@@ -534,31 +619,52 @@ def board_decide(company_id, request_id, approve, note=""):
 
 
 def tick(company_id, spend_round=True, queries=None):
-    """One full operating cycle. Idempotent-ish: skips phases with nothing to do."""
+    """One operating cycle: discover -> evaluate -> decide -> build -> deploy.
+
+    A missing human capability parks ONE project; it never stops the company and it
+    never turns into a fake success. Every phase is bounded so a tick stays cheap.
+    """
     db.init()
     log = []
     s = state(company_id)
     if not s:
         return {"ok": False, "error": "no such company"}
-    live = [p for p in s["projects"] if p["stage"] in ("DISCOVERED", "VALIDATED", "AWAITING_BOARD", "FUNDED", "BUILDING", "LIVE", "SCALING")]
-    pending = [r for r in s["board_requests"]]
-    discovered = [p for p in s["projects"] if p["stage"] == "DISCOVERED"]
-    if pending:
-        log.append({"phase": "halt", "detail": f"{len(pending)} board request(s) pending — CEO cannot pre-empt the board", "ms": 0})
-    elif discovered:
-        # the next step in the loop is always: evaluate what has been discovered
-        for p in discovered[:2]:
-            log.append({"phase": "evaluate", "detail": evaluate(company_id, p["id"])})
-        log.append({"phase": "decide", "detail": decide(company_id)})
-    elif live:
-        log.append({"phase": "skip_discovery", "detail": f"{len(live)} live project(s) already in portfolio", "ms": 0})
-        log.append({"phase": "decide", "detail": decide(company_id)})
-    else:
-        created, raw = discover(company_id, queries=queries)
-        log.append({"phase": "sweep", "detail": ""})
+    caps.sync(company_id)
+
+    by_stage = {}
+    for p in s["projects"]:
+        by_stage.setdefault(p["stage"], []).append(p)
+
+    # 1. nothing yet -> find something to do
+    if not s["projects"]:
+        created, _raw = discover(company_id, queries=queries)
         log.append({"phase": "discover", "detail": [c["slug"] for c in created]})
-        if created:
-            for c in created[: (2 if spend_round else 1)]:
-                log.append({"phase": "evaluate", "detail": evaluate(company_id, c["project_id"])})
-            log.append({"phase": "decide", "detail": decide(company_id)})
+
+    s = state(company_id)
+    by_stage = {}
+    for p in s["projects"]:
+        by_stage.setdefault(p["stage"], []).append(p)
+
+    # 2. evaluate what has not been through the gate
+    for p in (by_stage.get("DISCOVERED") or [])[: (2 if spend_round else 1)]:
+        log.append({"phase": "evaluate", "detail": evaluate(company_id, p["id"])})
+
+    # 3. decide (the board has to answer before the CEO may move again)
+    if s["board_requests"]:
+        log.append({"phase": "halt", "detail": f"{len(s['board_requests'])} board request(s) pending — the CEO cannot pre-empt the board"})
+    elif (by_stage.get("VALIDATED") or by_stage.get("FUNDED") or by_stage.get("BUILT_LOCAL")
+          or by_stage.get("LIVE") or by_stage.get("BUILDING")):
+        log.append({"phase": "decide", "detail": decide(company_id)})
+
+    # 4. build what has been funded — this needs no human, so it is never blocked
+    s = state(company_id)
+    funded = [p for p in s["projects"] if p["stage"] == "FUNDED"]
+    if funded:
+        log.append({"phase": "build", "detail": build_project(company_id, funded[0]["id"])})
+
+    # 5. deploy — needs a host, so this is where a setup request can appear
+    s = state(company_id)
+    for p in [x for x in s["projects"] if x["stage"] == "BUILT_LOCAL"][:1]:
+        log.append({"phase": "deploy", "detail": deploy_project(company_id, p["id"])})
+
     return {"ok": True, "log": log, "state": state(company_id)}

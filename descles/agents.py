@@ -84,6 +84,16 @@ SCHEMAS = {
   "risk_ack": "the worst realistic outcome and its cost",
   "board_ask": "one line a shareholder can decide on"
 }""",
+    "CTO_LANDING": """{
+  "headline": "<= 70 chars, the outcome the buyer gets, not the feature",
+  "subheadline": "<= 180 chars, who it is for and what changes for them",
+  "bullets": ["3 bullets, each a concrete thing that is true of the MVP you scoped"],
+  "cta_label": "2-4 words",
+  "faq": [{"q": "What exactly do I get?", "a": "one or two sentences"},
+          {"q": "What happens if it does not work for me?", "a": "refund terms"}],
+  "footer_note": "one line, no marketing voice",
+  "price_cents": 1900
+}""",
 }
 
 
@@ -297,3 +307,48 @@ def ceo_decide(company, model, state):
         }
 
     return _ask(company, "CEO", model, user, "CEO", fb)
+
+
+def cto_landing(company, model, opp, cfo, cto, coo):
+    """The copy for the landing page. The page structure is code; only the words
+    come from the model. Charter clause: no deceptive marketing — so it is told,
+    and the runtime also refuses claims that cannot be true of a page that has no
+    users yet."""
+    floor = 1000  # Paddle routes anything under $10 to custom pricing; keep it >= $10
+    user = (
+        "Write the copy for the landing page that will test this offer. This page IS the experiment:\n"
+        "it goes live before the product is finished, and the only thing it must do is find out whether\n"
+        "anyone clicks Buy at this price.\n\n"
+        + "OPPORTUNITY:\n" + json.dumps(opp, ensure_ascii=False, indent=1)
+        + "\n\nCTO SCOPE (what will actually exist):\n" + json.dumps(cto, ensure_ascii=False, indent=1)
+        + "\n\nCFO PRICE AND LIMITS:\n" + json.dumps(cfo, ensure_ascii=False, indent=1)
+        + "\n\nCOO SUCCESS/ KILL:\n" + json.dumps(coo, ensure_ascii=False, indent=1)
+        + f"\n\nHARD RULES for this copy:\n"
+        " - Do not claim customers, testimonials, ratings, uptime or integrations that do not exist yet.\n"
+        " - Do not promise outcomes the evidence does not support. The page may say what it does, not what it wins.\n"
+        f" - price_cents must be >= {floor} (Paddle routes sub-$10 prices to custom pricing).\n"
+        "   Default to the CFO's price unless it is below the floor."
+    )
+
+    def fb():
+        price = int(cfo.get("price_cents") or 1900)
+        base = {
+            "headline": (opp.get("one_liner") or opp.get("name") or "")[:70],
+            "subheadline": (opp.get("problem") or "")[:180],
+            "bullets": ["Does one job, does it fast", "No account needed to try it",
+                        "Cancel in one click"],
+            "cta_label": "Buy now",
+            "faq": [
+                {"q": "What exactly do I get?", "a": "Access to the tool as soon as payment clears."},
+                {"q": "What happens if it does not work for me?", "a": "Full refund within 14 days."},
+            ],
+            "footer_note": "Built and operated by an autonomous company.",
+            "price_cents": max(price, floor),
+        }
+        return base
+
+    out = _ask(company, "CTO", model, user, "CTO_LANDING", fb)
+    out["price_cents"] = max(int(out.get("price_cents") or 0), floor)
+    if not out.get("headline"):
+        out["headline"] = opp.get("name") or "The product"
+    return out

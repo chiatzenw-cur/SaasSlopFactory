@@ -54,6 +54,23 @@ CREATE TABLE IF NOT EXISTS evaluations(
 CREATE TABLE IF NOT EXISTS capabilities(
   company_id TEXT, name TEXT, status TEXT, detail TEXT, PRIMARY KEY(company_id, name)
 );
+CREATE TABLE IF NOT EXISTS setup_requests(
+  id TEXT PRIMARY KEY, company_id TEXT, ts TEXT, capability TEXT, title TEXT,
+  why TEXT, steps TEXT, url TEXT, status TEXT DEFAULT 'PENDING', project_id TEXT,
+  resolved_at TEXT, note TEXT
+);
+CREATE TABLE IF NOT EXISTS webhook_events(
+  provider TEXT, event_id TEXT, ts TEXT, type TEXT, payload TEXT,
+  PRIMARY KEY(provider, event_id)
+);
+CREATE TABLE IF NOT EXISTS metrics(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, company_id TEXT, project_id TEXT, ts TEXT,
+  name TEXT, value REAL, meta TEXT
+);
+CREATE TABLE IF NOT EXISTS builds(
+  id TEXT PRIMARY KEY, company_id TEXT, project_id TEXT, slug TEXT, ts TEXT,
+  path TEXT, url TEXT, files TEXT, copy TEXT, deploy_url TEXT, deploy_state TEXT
+);
 """
 
 
